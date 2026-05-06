@@ -28,6 +28,7 @@ import socket
 import time
 import importlib
 import math
+import threading
 from typing import Iterable, Sequence
 
 ROBOT_IP = "169.254.134.8"
@@ -39,6 +40,76 @@ ROBOTIQ_PORT = 63352
 
 def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
+
+
+class _RobotiqSocketClient:
+    """Robotiq URCap socket client matching the known-working reference logic."""
+
+    def __init__(self, host: str, port: int, timeout_s: float) -> None:
+        self.host = host
+        self.port = port
+        self.timeout_s = timeout_s
+        self._sock: socket.socket | None = None
+        self._lock = threading.Lock()
+
+    def connect(self) -> None:
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._sock.settimeout(self.timeout_s)
+        self._sock.connect((self.host, self.port))
+        self.activate()
+
+    def disconnect(self) -> None:
+        if self._sock is not None:
+            try:
+                self._sock.close()
+            finally:
+                self._sock = None
+
+    def _send(self, cmd: bytes) -> str:
+        if self._sock is None:
+            raise RuntimeError("Robotiq socket is not connected.")
+        with self._lock:
+            self._sock.sendall(cmd)
+            try:
+                return self._sock.recv(1024).decode("ascii", errors="ignore").strip()
+            except socket.timeout:
+                return ""
+
+    def send_line(self, cmd: str) -> str:
+        return self._send((cmd.strip() + "\n").encode("ascii"))
+
+    def activate(self) -> None:
+        self._send(b"SET ACT 0\n")
+        time.sleep(0.1)
+        self._send(b"SET ACT 1\n")
+
+        deadline = time.time() + 10.0
+        while time.time() < deadline:
+            resp = self._send(b"GET STA\n")
+            if "STA 3" in resp:
+                break
+            time.sleep(0.1)
+
+        self._send(b"SET GTO 1\n")
+
+    def move(self, position: int, speed: int = 200, force: int = 150) -> None:
+        position = max(0, min(255, int(position)))
+        speed = max(0, min(255, int(speed)))
+        force = max(0, min(255, int(force)))
+        cmd = (
+            f"SET POS {position}\n"
+            f"SET SPE {speed}\n"
+            f"SET FOR {force}\n"
+            "SET GTO 1\n"
+        ).encode("ascii")
+        self._send(cmd)
+
+    def get_var(self, var_name: str) -> int:
+        resp = self.send_line(f"GET {var_name}")
+        try:
+            return int(resp.split()[-1])
+        except (ValueError, IndexError) as exc:
+            raise RuntimeError(f"Unexpected gripper response: {resp}") from exc
 
 
 def _normalize_quaternion(quat_xyzw: Sequence[float]) -> list[float]:
@@ -104,7 +175,7 @@ class UR7eVectorController:
 
         self._ur_sock: socket.socket | None = None
         self._ur_secondary_sock: socket.socket | None = None
-        self._gripper_sock: socket.socket | None = None
+        self._gripper_client: _RobotiqSocketClient | None = None
         self._rtde_receive = None
         self._gripper_available = False
         self._gripper_warned = False
@@ -136,17 +207,20 @@ class UR7eVectorController:
             raise
 
         try:
-            self._gripper_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self._gripper_sock.settimeout(self.timeout_s)
-            self._gripper_sock.connect((self.robot_ip, self.robotiq_port))
+            self._gripper_client = _RobotiqSocketClient(
+                self.robot_ip,
+                self.robotiq_port,
+                self.timeout_s,
+            )
+            self._gripper_client.connect()
             self._gripper_available = True
             self._gripper_backend = "socket"
         except (socket.timeout, ConnectionError, OSError) as exc:
-            if self._gripper_sock is not None:
+            if self._gripper_client is not None:
                 try:
-                    self._gripper_sock.close()
+                    self._gripper_client.disconnect()
                 finally:
-                    self._gripper_sock = None
+                    self._gripper_client = None
 
             if self._try_enable_urscript_gripper_backend():
                 self._gripper_available = True
@@ -225,11 +299,11 @@ class UR7eVectorController:
             finally:
                 self._ur_secondary_sock = None
 
-        if self._gripper_sock is not None:
+        if self._gripper_client is not None:
             try:
-                self._gripper_sock.close()
+                self._gripper_client.disconnect()
             finally:
-                self._gripper_sock = None
+                self._gripper_client = None
 
         if self._rtde_receive is not None:
             try:
@@ -267,26 +341,19 @@ class UR7eVectorController:
 
     def _send_gripper_cmd(self, cmd: str) -> None:
         self._ensure_connected()
-        if not self._gripper_available or self._gripper_sock is None:
+        if not self._gripper_available or self._gripper_client is None:
             raise RuntimeError(
                 "Gripper is unavailable: unable to send command. "
                 "Check port 63352 service on robot controller."
             )
-        assert self._gripper_sock is not None
-        self._gripper_sock.sendall((cmd.strip() + "\n").encode("ascii"))
+        self._gripper_client.send_line(cmd)
 
     def _get_gripper_var(self, var_name: str) -> int:
         self._ensure_connected()
-        if not self._gripper_available or self._gripper_sock is None:
+        if not self._gripper_available or self._gripper_client is None:
             raise RuntimeError("Gripper is unavailable.")
 
-        cmd = f"GET {var_name}\n"
-        self._gripper_sock.sendall(cmd.encode("ascii"))
-        data = self._gripper_sock.recv(1024).decode("ascii", errors="ignore").strip()
-        parts = data.split()
-        if len(parts) < 2 or parts[0] != var_name:
-            raise RuntimeError(f"Unexpected gripper response: {data}")
-        return int(parts[1])
+        return self._gripper_client.get_var(var_name)
 
     def is_gripper_available(self) -> bool:
         return self._gripper_available
@@ -307,13 +374,9 @@ class UR7eVectorController:
             self._send_urscript_secondary(script)
             return
 
-        self._send_gripper_cmd("SET ACT 0")
-        time.sleep(0.05)
-        self._send_gripper_cmd("SET ACT 1")
-        self._send_gripper_cmd("SET GTO 1")
-        self._send_gripper_cmd("SET SPE 255")
-        self._send_gripper_cmd("SET FOR 120")
-        time.sleep(0.3)
+        if self._gripper_client is None:
+            raise RuntimeError("Gripper is unavailable.")
+        self._gripper_client.activate()
 
     def move_joints(
         self,
@@ -400,12 +463,9 @@ class UR7eVectorController:
             self._last_gripper_open_ratio = g
             return
 
-        self._send_gripper_cmd("SET ACT 1")
-        self._send_gripper_cmd("SET MOD 1")
-        self._send_gripper_cmd(f"SET SPE {speed}")
-        self._send_gripper_cmd(f"SET FOR {force}")
-        self._send_gripper_cmd(f"SET POS {position}")
-        self._send_gripper_cmd("SET GTO 1")
+        if self._gripper_client is None:
+            raise RuntimeError("Gripper is unavailable.")
+        self._gripper_client.move(position, speed=speed, force=force)
         self._last_gripper_open_ratio = g
 
     def move_ee_pose(
