@@ -1,0 +1,137 @@
+<mujoco model="HotPlateHPR6">
+  <!-- XML 位于 model/object，返回到 assets -->
+  <compiler angle="radian" meshdir="../../assets"/>
+
+  <option gravity="0 0 -9.81"/>
+
+  <asset>
+    <!-- 底座 mesh -->
+    <mesh
+      name="hotplate_hpr6_body_mesh"
+      file="HotPlateHPR6/body.obj"
+      scale="0.3 0.3 0.3"/>
+
+    <!-- 盖子 mesh -->
+    <mesh
+      name="hotplate_hpr6_lid_mesh"
+      file="HotPlateHPR6/lid.obj"
+      scale="0.3 0.3 0.3"/>
+  </asset>
+
+  <worldbody>
+    <body name="hotplate_hpr6" quat="0.7071 0.7071 0 0">
+      <!-- body：视觉几何 -->
+      <geom
+        name="hotplate_hpr6_body_visual"
+        type="mesh"
+        mesh="hotplate_hpr6_body_mesh"
+        rgba="0.5 0.5 0.5 1"
+        contype="0"
+        conaffinity="0"/>
+
+      <!-- body：碰撞几何 -->
+
+      <geom name="hotplate_hpr6_body_collision_1"
+        type="box"
+        size="0.16 0.065 0.21"
+        pos="0 0.065 0.03"
+        density="7500"
+        contype="1"
+        conaffinity="1"
+        rgba="0 0 0 0"/>
+      <geom name="hotplate_hpr6_body_collision_2"
+        type="box"
+        size="0.143 0.05 0.16"
+        density="7500"
+        pos="0 0.15 -0.018"
+        contype="1"
+        conaffinity="1"
+        rgba="0 0 0 0"/>
+
+      <!-- lid：单独子 body -->
+      <body
+        name="hotplate_hpr6_lid"
+        pos="0 0 0"
+        quat="1 0 0 0">
+
+        <!-- 盖子的转轴关节 -->
+        <joint
+          name="hotplate_hpr6_lid_hinge"
+          type="hinge"
+          pos="0 0.124 -0.185"
+          axis="1 0 0"
+          range="-0.0 1.57"
+          damping="0.2"/>
+         
+        <!-- lid：视觉几何 -->
+        <geom
+          name="hotplate_hpr6_lid_visual"
+          type="mesh"
+          mesh="hotplate_hpr6_lid_mesh"
+          contype="0"
+          rgba="0.5 0.5 0.5 1"
+          conaffinity="0"/>
+
+        <!-- lid：碰撞几何 -->
+     
+        <geom name="hotplate_hpr6_lid_collision_1"
+          type="box"
+          size="0.16 0.185 0.005"
+          density="2500"
+          pos="0 0.32 -0.27"
+          contype="1"
+          conaffinity="1"
+          friction="1.0 0.3 0.001"
+          rgba="0 0 0 0"/>
+        <geom name="hotplate_hpr6_lid_collision_2"
+          type="box"
+          density="2500"
+          size="0.005 0.185 0.03"
+          pos="0.17 0.32 -0.24"
+          contype="1"
+          conaffinity="1"
+          friction="1.0 0.3 0.001"
+          rgba="0 0 0 0"/>
+        <geom name="hotplate_hpr6_lid_collision_3"
+          type="box"
+          density="2500"
+          size="0.005 0.185 0.03"
+          pos="-0.17 0.32 -0.24"
+          contype="1"
+          conaffinity="1"
+          friction="1.0 0.3 0.001"
+          rgba="0 0 0 0"/>
+        <geom name="hotplate_hpr6_lid_collision_4"
+          type="box"
+          size="0.17 0.005 0.03"
+          density="2500"
+          pos="0 0.51 -0.24"
+          contype="1"
+          conaffinity="1"
+          friction="1.0 0.3 0.001"
+          rgba="0 0 0 0"/>
+        <geom name="hotplate_hpr6_lid_collision_5"
+          type="box"
+          size="0.05 0.015 0.01"
+          density="2500"
+          pos="0 0.52 -0.23"
+          contype="1"
+          conaffinity="1"
+          friction="1.0 0.3 0.001"
+          rgba="0.5 0.5 0.5 1"/>
+
+      </body>
+
+    </body>
+    
+  </worldbody>
+  
+  <actuator>
+     <position
+      name="lid_control"
+      joint="hotplate_hpr6_lid_hinge"
+      kp="20"
+      ctrlrange="-0 1.57"
+      ctrllimited="true"/>
+  </actuator>
+</mujoco>

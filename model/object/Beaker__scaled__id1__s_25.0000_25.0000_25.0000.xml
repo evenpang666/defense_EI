@@ -1,0 +1,31 @@
+<mujoco model="Beaker">
+  
+  <compiler angle="radian" meshdir="../../assets" />
+
+  <option gravity="0 0 -9.81" />
+
+  <asset>
+    
+    <mesh name="beaker_mesh" file="Beaker/base.obj" scale="3.250000 3.250000 3.500000" />
+  </asset>
+
+  <worldbody>
+    
+    <body name="beaker" quat="0.7071 0.7071 0 0" pos="0.362500 0.000000 -0.000000">
+
+      
+      <geom name="beaker_visual" type="mesh" mesh="beaker_mesh" rgba="0.65 0.85 1.0 0.3" contype="0" conaffinity="0" />
+    
+      
+      <geom name="glass_sheet_collision_2" type="cylinder" size="0.053500 0.005000" pos="-0.366250 0.006125 -0.000000" euler="1.5708 0 0" contype="1" conaffinity="1" friction="0.6 0.2 0.001" density="2500" rgba="0 0 0 0" />
+      <geom name="ring_1" type="box" size="0.025000 0.087500 0.002500" pos="-0.363750 0.090000 -0.055000" density="2500" contype="1" conaffinity="1" rgba="0 0 0 0" />
+      <geom name="ring_2" type="box" size="0.025000 0.087500 0.002500" pos="-0.363750 0.090000 0.055000" density="2500" contype="1" conaffinity="1" rgba="0 0 0 0" />
+      <geom name="ring_3" type="box" size="0.025000 0.087500 0.002500" pos="-0.312500 0.090000 -0.000000" density="2500" contype="1" conaffinity="1" euler="0 1.5708 0" rgba="0 0 0 0" />
+      <geom name="ring_4" type="box" size="0.025000 0.087500 0.002500" density="2500" pos="-0.425000 0.090000 -0.000000" contype="1" conaffinity="1" euler="0 1.5708 0" rgba="0 0 0 0" />
+      <geom name="ring_5" type="box" size="0.025000 0.087500 0.002500" pos="-0.408500 0.090000 -0.038250" density="2500" contype="1" conaffinity="1" euler="0 0.7854 0" rgba="0 0 0 0" />
+      <geom name="ring_6" type="box" size="0.025000 0.087500 0.002500" pos="-0.327500 0.090000 0.038250" density="2500" contype="1" conaffinity="1" euler="0 0.7854 0" rgba="0 0 0 0" />
+      <geom name="ring_7" type="box" size="0.025000 0.087500 0.002500" pos="-0.408500 0.090000 0.038250" density="2500" contype="1" conaffinity="1" euler="0 -0.7854 0" rgba="0 0 0 0" />
+      <geom name="ring_8" type="box" size="0.025000 0.087500 0.002500" pos="-0.327500 0.090000 -0.038250" density="2500" contype="1" conaffinity="1" euler="0 -0.7854 0" rgba="0 0 0 0" />
+    </body>
+  </worldbody>
+</mujoco>

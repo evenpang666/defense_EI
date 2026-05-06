@@ -1,0 +1,38 @@
+<mujoco model="Roundfalsk">
+  <!-- XML 位于 model/object，需要返回到 assets -->
+  <compiler angle="radian" meshdir="../../assets"/>
+
+  <option gravity="0 0 -9.81"/>
+
+  <asset>
+    <!-- 主 mesh -->
+    <mesh
+      name="roundfalsk_mesh"
+      file="Roundfalsk/base.obj"
+      scale="0.3 0.3 0.3"/>
+  </asset>
+
+  <worldbody>
+    <body name="roundfalsk" quat="0.7071 0.7071 0 0">
+
+      <!-- 视觉几何（不参与碰撞） -->
+      <geom
+        name="roundfalsk_visual"
+        type="mesh"
+        mesh="roundfalsk_mesh"
+        contype="0"
+        conaffinity="0"/>
+
+      <!-- 碰撞几何（用于交互 / 放置） -->
+      <geom
+        name="roundfalsk_collision"
+        type="mesh"
+        mesh="roundfalsk_mesh"
+        rgba="0.8 0.8 0.8 1"
+        contype="1"
+        conaffinity="1"
+        friction="1.0 0.3 0.001"/>
+
+    </body>
+  </worldbody>
+</mujoco>

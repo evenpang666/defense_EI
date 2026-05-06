@@ -1,0 +1,21 @@
+agent:
+  llm:
+    provider: qwen
+    model: qwen3.5-397b-a17b
+    base_url: https://openrouter.ai/api/v1
+    api_key: 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
+  id: "evobody_judger"
+  name: "Evobody Task Judger"
+  traits: "strict evaluator for final task completion"
+  tools:
+    skills:
+      - skills/judge-contract
+    mcp: []
+    python:
+      - python_tools/judge_contract.py:task_judge_schema
+      - python_tools/judge_contract.py:extract_task_judge_json
+      - python_tools/judge_contract.py:normalize_task_judge_json
+      - python_tools/judge_contract.py:extract_and_normalize_task_judge_json
+    allow_skill_execution: false
+  prompt:
+    path: prompts/system.md

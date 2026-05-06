@@ -1,0 +1,23 @@
+agent:
+  llm:
+    provider: qwen
+    model: qwen3.5-397b-a17b
+    base_url: https://openrouter.ai/api/v1
+    api_key: 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
+  id: "evobody_supervisor"
+  name: "Evobody Task Supervisor"
+  traits: "robotics planner, strict JSON output"
+  tools:
+    skills:
+      - skills/supervisor-contract
+      - skills/scene-loader
+    mcp: []
+    python:
+      - python_tools/supervisor_contract.py:supervisor_output_schema
+      - python_tools/supervisor_contract.py:extract_supervisor_json
+      - python_tools/supervisor_contract.py:validate_supervisor_json
+      - python_tools/supervisor_contract.py:extract_and_validate_supervisor_json
+      - python_tools/scene_loader_tool.py:scene_loader_script
+    allow_skill_execution: false
+  prompt:
+    path: prompts/system.md

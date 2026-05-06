@@ -1,0 +1,43 @@
+<mujoco model="CoaterMSC150T">
+  
+  <compiler angle="radian" meshdir="../../assets" />
+
+  <option gravity="0 0 -9.81" />
+
+  <asset>
+    
+    <mesh name="coater_msc150t_mesh" file="CoaterMSC150T/base.obj" scale="0.210000 0.210000 0.210000" />
+  </asset>
+
+  <worldbody>
+    <body name="coater_msc150t" quat="0.7071 0.7071 0 0">
+
+      
+      <geom name="coater_msc150t_visual" type="mesh" mesh="coater_msc150t_mesh" contype="0" rgba="0.3 0.3 0.3 1" conaffinity="0" />
+      <geom name="rotate_origin" type="box" size="0.007000 0.007000 0.007000" pos="-0.161000 0.350000 -0.001540" density="2500" contype="0" conaffinity="0" rgba="0 0 0 0" />
+      
+      <body name="coater_msc150t_lid" pos="0.000000 0.000000 0.000000" quat="1 0 0 0">
+        <joint name="coater_msc150t_lid_hinge" type="hinge" pos="-0.161000 0.350000 -0.001540" axis="0 0 1" range="-0 1.5" limited="true" damping="0.2" />
+        <geom name="handle" type="box" size="0.007000 0.011900 0.028000" pos="0.133000 0.357000 0.000000" density="2500" contype="1" conaffinity="1" rgba="0.3 0.3 0.3 1" />
+
+        
+         <site name="lid_handle_grasp_site" type="sphere" pos="0.133000 0.357000 0.000000" quat="1 0 0 0" size="0.010500" rgba="0 0 0 0" />
+
+        <geom type="cylinder" size="0.161000 0.002800" pos="-0.000000 0.347900 -0.000000" euler="1.5708 0 0" contype="1" conaffinity="1" friction="0.6 0.2 0.001" density="2500" rgba="0.8 0.8 0.8 0.4" />
+      </body>
+    
+      
+      <geom name="coater_msc150t_collision" type="mesh" mesh="coater_msc150t_mesh" rgba="0.5 0.5 0.5 1" contype="0" conaffinity="0" friction="1.0 0.3 0.001" />
+      <geom name="box_1" type="box" size="0.171500 0.122500 0.171500" pos="0.000000 0.122500 0.000000" density="4500" contype="1" conaffinity="1" rgba="0 0 0 0" />
+      <geom name="box_2" type="box" size="0.028000 0.115500 0.177800" pos="-0.168000 0.224000 0.000000" density="4500" contype="1" conaffinity="1" rgba="0.5 0.5 0.5 1" />
+      <geom name="box_3" type="box" size="0.175000 0.049000 0.021000" pos="-0.021000 0.294000 0.140000" density="4500" contype="1" conaffinity="1" rgba="0 0 0 0" />
+      <geom name="box_4" type="box" size="0.175000 0.049000 0.021000" pos="-0.021000 0.294000 -0.154000" density="4500" contype="1" conaffinity="1" rgba="0 0 0 0" />
+      <geom name="box_5" type="box" size="0.021000 0.049000 0.175000" pos="0.140000 0.294000 -0.000000" density="4500" contype="1" conaffinity="1" rgba="0 0 0 0" />
+      <geom name="table" type="cylinder" size="0.030100 0.021000" pos="0.000000 0.254100 -0.012600" euler="1.5708 0 0" contype="1" conaffinity="1" friction="0.6 0.2 0.001" density="2500" rgba="0 0 0 0" />
+
+    </body>
+  </worldbody>
+   <actuator>
+    <position name="coater_msc150t_lid_ctrl" joint="coater_msc150t_lid_hinge" kp="20" ctrlrange="0 1.57" ctrllimited="true" />
+  </actuator>
+</mujoco>

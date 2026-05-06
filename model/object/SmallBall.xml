@@ -1,0 +1,14 @@
+<mujoco model="SmallBall">
+  <worldbody>
+    <body name="small_ball">
+      <geom
+        name="small_ball_geom"
+        type="sphere"
+        size="0.01"
+        rgba="1 0 0 1"
+        mass="0.01"
+        contype="1"
+        conaffinity="1"/>
+    </body>
+  </worldbody>
+</mujoco>

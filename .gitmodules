@@ -1,0 +1,9 @@
+[submodule "third_party/lerobot"]
+	path = third_party/lerobot
+	url = https://github.com/huggingface/lerobot.git
+[submodule "third_party/libero"]
+	path = third_party/libero
+	url = https://github.com/Lifelong-Robot-Learning/LIBERO.git
+[submodule "third_party/DefenseAgent"]
+	path = third_party/DefenseAgent
+	url = https://github.com/yishu031031/DefenseAgent.git

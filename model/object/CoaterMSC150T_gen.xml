@@ -1,0 +1,79 @@
+<mujoco model="CoaterMSC150T">
+  <compiler angle="radian" meshdir="../../assets"/>
+  <option gravity="0 0 -9.81"/>
+
+  <asset>
+    <mesh
+      name="coater_msc150t_body_mesh"
+      file="CoaterMSC150T/body.obj"
+      scale="0.3 0.3 0.3"/>
+
+    <mesh
+      name="coater_msc150t_lid_mesh"
+      file="CoaterMSC150T/lid.obj"
+      scale="0.3 0.3 0.3"/>
+  </asset>
+
+  <worldbody>
+    <body name="coater_msc150t" quat="0.7071 0.7071 0 0">
+
+      <!-- body visual -->
+      <geom
+        name="coater_msc150t_body_visual"
+        type="mesh"
+        mesh="coater_msc150t_body_mesh"
+        contype="0"
+        conaffinity="0"/>
+
+      <!-- body collision -->
+      <geom
+        name="coater_msc150t_body_collision"
+        type="mesh"
+        mesh="coater_msc150t_body_mesh"
+        rgba="0.8 0.8 0.8 1"
+        contype="1"
+        conaffinity="1"
+        friction="1.0 0.3 0.001"/>
+
+      <!-- lid -->
+      <body name="coater_msc150t_lid" pos="0 0 0" quat="1 0 0 0">
+        <joint
+          name="coater_msc150t_lid_hinge"
+          type="hinge"
+          pos="0 0.3 -0.185"
+          axis="1 0 0"
+          range="-0.785 1.2"
+          limited="true"
+          damping="0.2"/>
+
+       
+
+        <!-- lid visual -->
+        <geom
+          name="coater_msc150t_lid_visual"
+          type="mesh"
+          mesh="coater_msc150t_lid_mesh"
+          contype="0"
+          conaffinity="0"/>
+
+        <!-- lid collision：先关掉，避免刚开始就卡死 -->
+        <geom
+          name="coater_msc150t_lid_collision"
+          type="mesh"
+          mesh="coater_msc150t_lid_mesh"
+          contype="0"
+          conaffinity="0"/>
+      </body>
+
+    </body>
+  </worldbody>
+
+  <actuator>
+    <position
+      name="coater_msc150t_lid_ctrl"
+      joint="coater_msc150t_lid_hinge"
+      kp="20"
+      ctrlrange="0 1.57"
+      ctrllimited="true"/>
+  </actuator>
+</mujoco>

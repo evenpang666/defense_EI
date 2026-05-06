@@ -1,0 +1,76 @@
+<mujoco model="Cleaner">
+  <!-- XML 位于 model/object，需要返回到 assets -->
+  <compiler angle="radian" meshdir="../../assets"/>
+
+  <option gravity="0 0 -9.81"/>
+
+  <asset>
+    <!-- 主 mesh -->
+    <mesh
+      name="cleaner_mesh"
+      file="Cleaner/base.obj"
+      scale="0.3 0.3 0.3"/>
+  </asset>
+
+  <worldbody>
+    <body name="cleaner" quat="0.7071 0.7071 0 0">
+
+      <!-- 视觉几何（不参与碰撞） -->
+      <geom
+        name="cleaner_visual"
+        type="mesh"
+        mesh="cleaner_mesh"
+        contype="0"
+        conaffinity="0"/>
+
+      <!-- 碰撞几何（用于交互 / 放置） -->
+     
+      <geom name="box_1"
+        type="box"
+        density="7500"
+        size="0.225 0.085 0.189"
+        pos="-0 0.085 0.02"
+        contype="1"
+        conaffinity="1"
+        friction="1.0 0.3 0.001"
+        rgba="0 0 0 0"/>
+      <geom name="box_2"
+        type="box"
+        density="7500"
+        size="0.225 0.115 0.01"
+        pos="0 0.285 0.2"
+        contype="1"
+        conaffinity="1"
+        friction="1.0 0.3 0.001"
+        rgba="0 0 0 0"/>
+      <geom name="box_3"
+        type="box"
+        density="7500"
+        size="0.225 0.115 0.01"
+        pos="0 0.285 -0.18"
+        contype="1"
+        conaffinity="1"
+        friction="1.0 0.3 0.001"
+        rgba="0 0 0 0"/>
+      <geom name="box_4"
+          type="box"
+          density="7500"
+          size="0.01 0.115 0.18"
+          pos="0.22 0.285 0.015"
+          contype="1"
+          conaffinity="1"
+          friction="1.0 0.3 0.001"
+          rgba="0 0 0 0"/>
+      <geom name="box_5"
+          type="box"
+          density="7500"
+          size="0.01 0.115 0.18"
+          pos="-0.22 0.285 0.015"
+          contype="1"
+          conaffinity="1"
+          friction="1.0 0.3 0.001"
+          rgba="0 0 0 0"/>
+
+    </body>
+  </worldbody>
+</mujoco>

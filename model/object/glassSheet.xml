@@ -1,0 +1,156 @@
+<mujoco model="glassSheet">
+  <!-- XML 在 model/object，下两级回到 assets -->
+  <compiler angle="radian" meshdir="../../assets"/>
+
+  <asset>
+    <!-- 主 mesh -->
+    <mesh
+      name="glass_sheet_mesh"
+      file="glassSheet/base.obj"
+      scale="0.1 0.1 0.1"/>
+    <texture
+      name="glass_diffuse"
+      type="2d"
+      file="../../assets/glassSheet/texture_diffuse.png"/>
+
+    <!-- 玻璃近似材质（MuJoCo 不是真 PBR） -->
+    <material
+      name="glass_material"
+      texture="glass_diffuse"
+      rgba="1 0 0 1"/>
+  </asset>
+
+  <worldbody>
+    <body name="glass_sheet"   euler="1.5708 0 0">
+
+      <!-- 视觉几何 -->
+      <geom
+        name="glass_sheet_visual"
+        type="mesh"
+        mesh="glass_sheet_mesh"
+        material="glass_material"
+        contype="0"
+        rgba="0.9 0.9 0.9 1"
+        conaffinity="0"/>
+
+      <!-- 碰撞几何（可抓取 / 可放置） -->
+      <geom
+        name="glass_sheet_collision_1"
+        type="cylinder"
+        size="0.007 0.0785"
+        pos="0 0.093 -0.041"
+        euler="1.5708 0 0"
+        contype="1"
+        conaffinity="1"
+        friction="0.6 0.2 0.001"
+        rgba="0 0 0 0"/>
+      <geom
+        name="glass_sheet_collision_2"
+        type="cylinder"
+        size="0.054 0.002"
+        pos="0 0.003 0"
+        euler="1.5708 0 0"
+        contype="1"
+        conaffinity="1"
+        friction="0.6 0.2 0.001"
+        rgba="0 0 0 0"/>
+      
+      <geom name="ring_1"
+        type="box"
+        size="0.043 0.0042 0.001"
+        pos="0 0.0091 0.003"
+        contype="1"
+        conaffinity="1"
+        rgba="0 0 0 0"/>
+      <geom name="ring_2"
+        type="box"
+        size="0.043 0.0042 0.001"
+        pos="0 0.0091 0.009"
+        contype="1"
+        conaffinity="1"
+        rgba="0 0 0 0"/>
+      <geom name="ring_3"
+        type="box"
+        size="0.043 0.0042 0.001"
+        pos="0 0.0091 0.015"
+        contype="1"
+        conaffinity="1"
+        rgba="0 0 0 0"/>
+      <geom name="ring_4"
+        type="box"
+        size="0.043 0.0042 0.001"
+        pos="0 0.0091 0.021"
+        contype="1"
+        conaffinity="1"
+        rgba="0 0 0 0"/>
+      <geom name="ring_5"
+        type="box"
+        size="0.043 0.0042 0.001"
+        pos="0 0.0091 0.027"
+        contype="1"
+        conaffinity="1"
+         rgba="0 0 0 0"/>
+      <geom name="ring_6"
+        type="box"
+        size="0.043 0.0042 0.001"
+        pos="0 0.0091 -0.028"
+        contype="1"
+        conaffinity="1"
+        rgba="0 0 0 0"/>
+      <geom name="ring_7"
+              type="box"
+              size="0.043 0.0042 0.001"
+              pos="0 0.0091 -0.009"
+              contype="1"
+              conaffinity="1"
+              rgba="0 0 0 0"/>
+      <geom name="ring_8"
+        type="box"
+        size="0.043 0.0042 0.001"
+        pos="0 0.0091 -0.003"
+        contype="1"
+        conaffinity="1"
+       rgba="0 0 0 0"/>
+      <geom name="ring_9"
+        type="box"
+        size="0.043 0.0042 0.001"
+        pos="0 0.0091 -0.016"
+        contype="1"
+        conaffinity="1"
+        rgba="0 0 0 0"/>
+      <geom name="ring_10"
+        type="box"
+        size="0.043 0.0042 0.001"
+        pos="0 0.0091 -0.022"
+        contype="1"
+        conaffinity="1"
+        rgba="0 0 0 0"/>
+      <geom name="ring_11"
+        type="box"
+        size="0.001 0.0042 0.03"
+        pos="0 0.0091 0"
+        contype="1"
+        conaffinity="1"
+        rgba="0 0 0 0"/>
+      <geom name="ring_12"
+        type="box"
+        size="0.001 0.0042 0.03"
+        pos="0.042 0.0091 0"
+        contype="1"
+        conaffinity="1"
+        rgba="0 0 0 0"/>
+      <geom name="ring_13"
+        type="box"
+        size="0.001 0.0042 0.03"
+        pos="-0.042 0.0091 0"
+        contype="1"
+        conaffinity="1"
+        rgba="0 0 0 0"/>
+
+
+
+
+
+    </body>
+  </worldbody>
+</mujoco>

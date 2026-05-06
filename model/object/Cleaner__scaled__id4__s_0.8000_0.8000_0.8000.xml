@@ -1,0 +1,28 @@
+<mujoco model="Cleaner">
+  
+  <compiler angle="radian" meshdir="../../assets" />
+
+  <option gravity="0 0 -9.81" />
+
+  <asset>
+    
+    <mesh name="cleaner_mesh" file="Cleaner/base.obj" scale="0.240000 0.240000 0.240000" />
+  </asset>
+
+  <worldbody>
+    <body name="cleaner" quat="0.7071 0.7071 0 0">
+
+      
+      <geom name="cleaner_visual" type="mesh" mesh="cleaner_mesh" contype="0" conaffinity="0" />
+
+      
+     
+      <geom name="box_1" type="box" density="7500" size="0.180000 0.068000 0.151200" pos="-0.000000 0.068000 0.016000" contype="1" conaffinity="1" friction="1.0 0.3 0.001" rgba="0 0 0 0" />
+      <geom name="box_2" type="box" density="7500" size="0.180000 0.092000 0.008000" pos="0.000000 0.228000 0.160000" contype="1" conaffinity="1" friction="1.0 0.3 0.001" rgba="0 0 0 0" />
+      <geom name="box_3" type="box" density="7500" size="0.180000 0.092000 0.008000" pos="0.000000 0.228000 -0.144000" contype="1" conaffinity="1" friction="1.0 0.3 0.001" rgba="0 0 0 0" />
+      <geom name="box_4" type="box" density="7500" size="0.008000 0.092000 0.144000" pos="0.176000 0.228000 0.012000" contype="1" conaffinity="1" friction="1.0 0.3 0.001" rgba="0 0 0 0" />
+      <geom name="box_5" type="box" density="7500" size="0.008000 0.092000 0.144000" pos="-0.176000 0.228000 0.012000" contype="1" conaffinity="1" friction="1.0 0.3 0.001" rgba="0 0 0 0" />
+
+    </body>
+  </worldbody>
+</mujoco>

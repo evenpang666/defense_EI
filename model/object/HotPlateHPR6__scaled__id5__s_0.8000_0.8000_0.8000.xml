@@ -1,0 +1,50 @@
+<mujoco model="HotPlateHPR6">
+  
+  <compiler angle="radian" meshdir="../../assets" />
+
+  <option gravity="0 0 -9.81" />
+
+  <asset>
+    
+    <mesh name="hotplate_hpr6_body_mesh" file="HotPlateHPR6/body.obj" scale="0.240000 0.240000 0.240000" />
+
+    
+    <mesh name="hotplate_hpr6_lid_mesh" file="HotPlateHPR6/lid.obj" scale="0.240000 0.240000 0.240000" />
+  </asset>
+
+  <worldbody>
+    <body name="hotplate_hpr6" quat="0.7071 0.7071 0 0">
+      
+      <geom name="hotplate_hpr6_body_visual" type="mesh" mesh="hotplate_hpr6_body_mesh" rgba="0.5 0.5 0.5 1" contype="0" conaffinity="0" />
+
+      
+
+      <geom name="hotplate_hpr6_body_collision_1" type="box" size="0.128000 0.052000 0.168000" pos="0.000000 0.052000 0.024000" density="7500" contype="1" conaffinity="1" rgba="0 0 0 0" />
+      <geom name="hotplate_hpr6_body_collision_2" type="box" size="0.114400 0.040000 0.128000" density="7500" pos="0.000000 0.120000 -0.014400" contype="1" conaffinity="1" rgba="0 0 0 0" />
+
+      
+      <body name="hotplate_hpr6_lid" pos="0.000000 0.000000 0.000000" quat="1 0 0 0">
+
+        
+        <joint name="hotplate_hpr6_lid_hinge" type="hinge" pos="0.000000 0.099200 -0.148000" axis="1 0 0" range="-0.0 1.57" damping="0.2" />
+         
+        
+        <geom name="hotplate_hpr6_lid_visual" type="mesh" mesh="hotplate_hpr6_lid_mesh" contype="0" rgba="0.5 0.5 0.5 1" conaffinity="0" />
+
+        
+     
+        <geom name="hotplate_hpr6_lid_collision_1" type="box" size="0.128000 0.148000 0.004000" density="2500" pos="0.000000 0.256000 -0.216000" contype="1" conaffinity="1" friction="1.0 0.3 0.001" rgba="0 0 0 0" />
+        <geom name="hotplate_hpr6_lid_collision_2" type="box" density="2500" size="0.004000 0.148000 0.024000" pos="0.136000 0.256000 -0.192000" contype="1" conaffinity="1" friction="1.0 0.3 0.001" rgba="0 0 0 0" />
+        <geom name="hotplate_hpr6_lid_collision_3" type="box" density="2500" size="0.004000 0.148000 0.024000" pos="-0.136000 0.256000 -0.192000" contype="1" conaffinity="1" friction="1.0 0.3 0.001" rgba="0 0 0 0" />
+        <geom name="hotplate_hpr6_lid_collision_4" type="box" size="0.136000 0.004000 0.024000" density="2500" pos="0.000000 0.408000 -0.192000" contype="1" conaffinity="1" friction="1.0 0.3 0.001" rgba="0 0 0 0" />
+
+      </body>
+
+    </body>
+    
+  </worldbody>
+  
+  <actuator>
+     <position name="lid_control" joint="hotplate_hpr6_lid_hinge" kp="20" ctrlrange="-0 1.57" ctrllimited="true" />
+  </actuator>
+</mujoco>

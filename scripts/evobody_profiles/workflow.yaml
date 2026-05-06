@@ -1,0 +1,17 @@
+workflow:
+  name: evobody_defenseagent_three_agent_pipeline
+  stages:
+    - id: evobody_supervisor
+      profile: scripts/evobody_profiles/supervisor/profile.yaml
+      output: logs/evobody_plan.json
+    - id: evobody_coder
+      profile: scripts/evobody_profiles/coder/profile.yaml
+      output: logs/atomic_actions.py
+    - id: evobody_judger
+      profile: scripts/evobody_profiles/judger/profile.yaml
+      output: logs/finished_view_judge.json
+  runtime:
+    scene_image_input: logs/current_view.png
+    final_front_image: logs/finished_view.png
+    final_wrist_image: logs/finished_view_wrist.png
+    save_scene_context: logs/evobody_scene_context.json

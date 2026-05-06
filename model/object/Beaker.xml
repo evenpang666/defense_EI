@@ -1,0 +1,112 @@
+<mujoco model="Beaker">
+  <!-- XML 位于 model/object，需要返回到 assets -->
+  <compiler angle="radian" meshdir="../../assets"/>
+
+  <option gravity="0 0 -9.81"/>
+
+  <asset>
+    <!-- 主 mesh -->
+    <mesh
+      name="beaker_mesh"
+      file="Beaker/base.obj"
+      scale="0.13 0.13 0.14"/>
+  </asset>
+
+  <worldbody>
+    
+    <body name="beaker" quat="0.7071 0.7071 0 0"  pos="0.0145 0 -0" >
+
+      <!-- 视觉几何（不参与碰撞） -->
+      <geom
+        name="beaker_visual"
+        type="mesh"
+        mesh="beaker_mesh"
+        rgba="0.65 0.85 1.0 0.3"
+        contype="0"
+        conaffinity="0"/>
+    
+      <!-- 碰撞几何（用于交互 / 放置） -->
+      <geom
+        name="glass_sheet_collision_2"
+        type="cylinder"
+        size="0.00214 0.0002"
+        pos="-0.01465 0.000245 -0"
+        euler="1.5708 0 0"
+        contype="1"
+        conaffinity="1"
+        friction="0.6 0.2 0.001"
+        density="2500"
+        rgba="0 0 0 0"/>
+      <geom name="ring_1"
+        type="box"
+        size="0.001 0.0035 0.0001"
+        pos="-0.01455 0.0036 -0.0022"
+        density="2500"
+        contype="1"
+        conaffinity="1"
+        rgba="0 0 0 0"/>
+      <geom name="ring_2"
+          type="box"
+          size="0.001 0.0035 0.0001"
+          pos="-0.01455 0.0036 0.0022"
+          density="2500"
+          contype="1"
+          conaffinity="1"
+          rgba="0 0 0 0"/>
+      <geom name="ring_3"
+        type="box"
+        size="0.001 0.0035 0.0001"
+        pos="-0.0125 0.0036 -0"
+        density="2500"
+        contype="1"
+        conaffinity="1"
+        euler="0 1.5708 0"
+        rgba="0 0 0 0"/>
+      <geom name="ring_4"
+        type="box"
+        size="0.001 0.0035 0.0001"
+        density="2500"
+        pos="-0.017 0.0036 -0"
+        contype="1"
+        conaffinity="1"
+        euler="0 1.5708 0"
+        rgba="0 0 0 0"/>
+      <geom name="ring_5"
+        type="box"
+        size="0.001 0.0035 0.0001"
+        pos="-0.01634 0.0036 -0.00153"
+        density="2500"
+        contype="1"
+        conaffinity="1"
+        euler="0 0.7854 0"
+        rgba="0 0 0 0"/>
+      <geom name="ring_6"
+        type="box"
+        size="0.001 0.0035 0.0001"
+        pos="-0.0131 0.0036 0.00153"
+        density="2500"
+        contype="1"
+        conaffinity="1"
+        euler="0 0.7854 0"
+        rgba="0 0 0 0"/>
+      <geom name="ring_7"
+        type="box"
+        size="0.001 0.0035 0.0001"
+        pos="-0.01634 0.0036 0.00153"
+        density="2500"
+        contype="1"
+        conaffinity="1"
+        euler="0 -0.7854 0"
+        rgba="0 0 0 0"/>
+      <geom name="ring_8"
+        type="box"
+        size="0.001 0.0035 0.0001"
+        pos="-0.0131 0.0036 -0.00153"
+        density="2500"
+        contype="1"
+        conaffinity="1"
+        euler="0 -0.7854 0"
+        rgba="0 0 0 0"/>
+    </body>
+  </worldbody>
+</mujoco>

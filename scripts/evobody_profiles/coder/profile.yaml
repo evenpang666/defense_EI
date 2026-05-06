@@ -1,0 +1,22 @@
+agent:
+  llm:
+    provider: qwen
+    model: qwen3.5-397b-a17b
+    base_url: https://openrouter.ai/api/v1
+    api_key: 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
+  id: "evobody_coder"
+  name: "Evobody Atomic Task Coder"
+  traits: "low-level robotics motion code generator"
+  tools:
+    skills:
+      - skills/atomic-code-contract
+    mcp: []
+    python:
+      - python_tools/atomic_runtime_contract.py:runtime_api_catalog
+      - python_tools/atomic_runtime_contract.py:check_forbidden_tokens
+      - python_tools/scene_runtime_tools.py:load_mujoco_scene_from_json
+      - python_tools/scene_runtime_tools.py:syntax_check_code_via_ast_tree
+      - python_tools/scene_runtime_tools.py:execute_generated_code_in_loaded_scene
+    allow_skill_execution: false
+  prompt:
+    path: prompts/system.md
