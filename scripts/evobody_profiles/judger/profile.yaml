@@ -3,7 +3,7 @@ agent:
     provider: qwen
     model: qwen3.5-397b-a17b
     base_url: https://openrouter.ai/api/v1
-    api_key: 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
+    api_key: 
   id: "evobody_judger"
   name: "Evobody Task Judger"
   traits: "strict evaluator for final task completion"
