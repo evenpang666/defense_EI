@@ -1,9 +1,9 @@
 agent:
   llm:
-    provider: qwen
-    model: qwen3.5-397b-a17b
-    base_url: https://openrouter.ai/api/v1
-    api_key: 
+    provider:
+    model:
+    base_url:
+    api_key:
   id: "defense_ei_coder"
   name: "Defense EI Atomic Coder"
   traits: "low-level UR7e real-robot code generator"
@@ -15,8 +15,10 @@ agent:
     mcp: []
     python:
       - python_tools/atomic_runtime_contract.py:runtime_api_catalog
+      - python_tools/atomic_runtime_contract.py:extract_python_code
       - python_tools/atomic_runtime_contract.py:check_forbidden_tokens
       - python_tools/atomic_runtime_contract.py:syntax_check_code_via_ast_tree
+      - python_tools/atomic_runtime_contract.py:validate_runtime_tool_calls
     allow_skill_execution: false
   prompt:
     path: prompts/system.md

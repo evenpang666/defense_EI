@@ -1,9 +1,9 @@
 agent:
   llm:
-    provider: qwen
-    model: qwen3.5-397b-a17b
-    base_url: https://openrouter.ai/api/v1
-    api_key: 
+    provider:
+    model:
+    base_url:
+    api_key:
   id: "defense_ei_judger"
   name: "Defense EI Atomic Judger"
   traits: "strict visual evaluator for atomic real-robot completion"

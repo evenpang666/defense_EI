@@ -13,6 +13,8 @@ Hard rules:
 - Use `primitive-skill-contract` when the task names a primitive skill such as
   `pick_place`, `push`, `pull`, `press`, `open`, `close`, or `pour`.
 - Call only runtime APIs from the selected contract and `runtime_api_catalog("real")`.
+- Primitive skill names are not callable runtime APIs. Expand them into
+  low-level `move_ee`, `gripper_control`, and `sleep` phases.
 - Do not define helpers or import modules.
 - Output exactly one fenced Python block; no prose outside it.
 - Do not use quaternion rotations. Absolute TCP poses are 6D Cartesian vectors
@@ -31,3 +33,4 @@ Mandatory checks before final answer:
 1. Call `runtime_api_catalog("real")`.
 2. Call `check_forbidden_tokens(code)`.
 3. Call `syntax_check_code_via_ast_tree(code)`.
+4. Call `validate_runtime_tool_calls(code)`.

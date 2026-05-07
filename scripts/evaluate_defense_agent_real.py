@@ -8,7 +8,6 @@ import asyncio
 import json
 import os
 import re
-import shutil
 import sys
 import time
 import traceback
@@ -38,6 +37,49 @@ DEFAULT_SUPERVISOR_PROFILE = DEFAULT_PROFILE_ROOT / "supervisor" / "profile.yaml
 DEFAULT_CODER_PROFILE = DEFAULT_PROFILE_ROOT / "coder" / "profile.yaml"
 DEFAULT_JUDGER_PROFILE = DEFAULT_PROFILE_ROOT / "judger" / "profile.yaml"
 DEFAULT_LOG_ROOT = PROJECT_ROOT / "logs" / "defense_agent_real"
+ALLOWED_RUNTIME_CALLS = {
+    "ee_pose",
+    "move_ee",
+    "gripper_control",
+    "move_x",
+    "move_y",
+    "move_z",
+    "rotate_x",
+    "rotate_y",
+    "rotate_z",
+    "sleep",
+    "print",
+}
+ALLOWED_BUILTIN_CALLS = {
+    "range",
+    "len",
+    "min",
+    "max",
+    "abs",
+    "float",
+    "int",
+    "str",
+    "list",
+    "dict",
+    "tuple",
+    "bool",
+    "enumerate",
+    "zip",
+    "round",
+    "sum",
+    "isinstance",
+}
+FORBIDDEN_RUNTIME_CALLS = {
+    "pick_and_place",
+    "pick_place",
+    "push",
+    "pull",
+    "press",
+    "open",
+    "close",
+    "pour",
+    "move_to",
+}
 
 
 @dataclass
@@ -207,11 +249,56 @@ def _build_react_agent(
     )
 
 
-def _check_generated_code(code: str) -> None:
+def _validate_generated_code_runtime_calls(tree: ast.AST) -> dict[str, Any]:
+    called_names: list[str] = []
+    forbidden_hits: list[str] = []
+    unknown_calls: list[str] = []
+    allowed = ALLOWED_RUNTIME_CALLS | ALLOWED_BUILTIN_CALLS
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name):
+            name = node.func.id
+            called_names.append(name)
+            if name in FORBIDDEN_RUNTIME_CALLS:
+                forbidden_hits.append(name)
+            elif name not in allowed:
+                unknown_calls.append(name)
+        elif isinstance(node.func, ast.Attribute):
+            unknown_calls.append(f"attribute_call:{node.func.attr}")
+
+    return {
+        "ok": not forbidden_hits and not unknown_calls,
+        "called_names": sorted(set(called_names)),
+        "forbidden_runtime_calls": sorted(set(forbidden_hits)),
+        "unknown_calls": sorted(set(unknown_calls)),
+    }
+
+
+def _check_generated_code(code: str) -> dict[str, Any]:
     lowered = (code or "").lower()
-    forbidden_text = [tok for tok in ("quat", "quaternion", "wxyz", "xyzw") if tok in lowered]
+    forbidden_text = [
+        tok
+        for tok in (
+            "quat",
+            "quaternion",
+            "wxyz",
+            "xyzw",
+            "move_to",
+            "pick_and_place",
+            "pick_place",
+            "push(",
+            "pull(",
+            "press(",
+            "open(",
+            "close(",
+            "pour(",
+        )
+        if tok in lowered
+    ]
     if forbidden_text:
-        raise ValueError(f"generated code contains forbidden rotation tokens: {forbidden_text}")
+        raise ValueError(f"generated code contains forbidden tokens: {forbidden_text}")
 
     tree = ast.parse(code, mode="exec")
     hits: list[str] = []
@@ -230,20 +317,21 @@ def _check_generated_code(code: str) -> None:
             hits.append(node.id)
     if hits:
         raise ValueError(f"generated code contains forbidden syntax: {sorted(set(hits))}")
+    runtime_report = _validate_generated_code_runtime_calls(tree)
+    if not runtime_report["ok"]:
+        raise ValueError(f"generated code calls unsupported runtime tools: {runtime_report}")
     compile(tree, "<real_robot_generated_code>", "exec")
+    return runtime_report
 
 
 def _execute_real_code(
     *,
     code: str,
     controller: UR7eVectorController | None,
-    dry_run: bool,
 ) -> dict[str, Any]:
     _check_generated_code(code)
-    if dry_run:
-        return {"ok": True, "dry_run": True, "signal": "REAL_EXECUTION_SKIPPED"}
     if controller is None:
-        raise RuntimeError("controller is required when dry_run is false")
+        raise RuntimeError("controller is required for real execution")
 
     safe_builtins = {
         "range": range,
@@ -273,14 +361,12 @@ def _execute_real_code(
         exec(compile(code, "<real_robot_generated_code>", "exec"), exec_globals)
         return {
             "ok": True,
-            "dry_run": False,
             "signal": "REAL_EXECUTION_OK",
             "elapsed_s": round(time.time() - started, 3),
         }
     except Exception:
         return {
             "ok": False,
-            "dry_run": False,
             "signal": "REAL_EXECUTION_FAILED",
             "elapsed_s": round(time.time() - started, 3),
             "error": traceback.format_exc(),
@@ -288,14 +374,9 @@ def _execute_real_code(
 
 
 def _snapshot_robot_initial_state(
-    controller: UR7eVectorController | None,
-    *,
-    dry_run: bool,
+    controller: UR7eVectorController,
 ) -> dict[str, Any]:
-    if dry_run or controller is None:
-        return {"dry_run": True, "joints": None, "gripper_open_ratio": None}
     return {
-        "dry_run": False,
         "joints": controller.get_current_joints(),
         "gripper_open_ratio": controller.get_gripper_open_ratio(),
     }
@@ -304,13 +385,9 @@ def _snapshot_robot_initial_state(
 def _restore_robot_initial_state(
     controller: UR7eVectorController | None,
     snapshot: dict[str, Any],
-    *,
-    dry_run: bool,
 ) -> dict[str, Any]:
-    if dry_run:
-        return {"ok": True, "dry_run": True, "signal": "REAL_RESTORE_SKIPPED"}
     if controller is None:
-        return {"ok": False, "dry_run": False, "signal": "REAL_RESTORE_NO_CONTROLLER"}
+        return {"ok": False, "signal": "REAL_RESTORE_NO_CONTROLLER"}
     try:
         joints = snapshot.get("joints")
         if isinstance(joints, list) and len(joints) == 6:
@@ -318,11 +395,10 @@ def _restore_robot_initial_state(
         gripper_ratio = snapshot.get("gripper_open_ratio")
         if isinstance(gripper_ratio, (int, float)) and controller.is_gripper_available():
             controller.set_gripper(float(gripper_ratio))
-        return {"ok": True, "dry_run": False, "signal": "REAL_RESTORE_OK"}
+        return {"ok": True, "signal": "REAL_RESTORE_OK"}
     except Exception:
         return {
             "ok": False,
-            "dry_run": False,
             "signal": "REAL_RESTORE_FAILED",
             "error": traceback.format_exc(),
         }
@@ -331,19 +407,12 @@ def _restore_robot_initial_state(
 def _capture_or_copy_images(
     *,
     capture_images_fn: Callable[[Path, Path], None] | None,
-    source_front: Path,
-    source_wrist: Path,
     target_front: Path,
     target_wrist: Path,
-    dry_run: bool,
 ) -> None:
     target_front.parent.mkdir(parents=True, exist_ok=True)
     if capture_images_fn is not None:
         capture_images_fn(target_front, target_wrist)
-        return
-    if dry_run:
-        shutil.copyfile(source_front, target_front)
-        shutil.copyfile(source_wrist, target_wrist)
         return
     raise RuntimeError("camera capture callback is required for real execution")
 
@@ -369,9 +438,7 @@ async def run_defense_agent_real_once(
     coder_profile: Path,
     judger_profile: Path,
     log_dir: Path,
-    controller: UR7eVectorController | None,
-    dry_run: bool,
-    generate_only: bool,
+    controller: UR7eVectorController,
     max_steps: int | None,
     max_attempts_per_atomic: int,
     embedding_model: str,
@@ -387,7 +454,7 @@ async def run_defense_agent_real_once(
     coder = _build_react_agent(coder_profile, enable_memory=False)
     judger = _build_react_agent(judger_profile, enable_memory=False)
 
-    initial_robot_state = _snapshot_robot_initial_state(controller, dry_run=dry_run)
+    initial_robot_state = _snapshot_robot_initial_state(controller)
     _save_json(log_dir / "initial_robot_state.json", initial_robot_state)
 
     observation = {
@@ -429,7 +496,7 @@ async def run_defense_agent_real_once(
             attempts=[],
             completed=True,
             code="",
-            execution={"ok": True, "dry_run": dry_run, "signal": "PLAN_ALREADY_COMPLETED"},
+            execution={"ok": True, "signal": "PLAN_ALREADY_COMPLETED"},
             judge={"task_result": "SUCCESS", "analysis": ""},
             raw_planner_text=raw_planner_text,
             raw_supervisor_text="",
@@ -465,7 +532,7 @@ async def run_defense_agent_real_once(
             attempts=[],
             completed=True,
             code="",
-            execution={"ok": True, "dry_run": dry_run, "signal": "NO_ATOMIC_TASKS"},
+            execution={"ok": True, "signal": "NO_ATOMIC_TASKS"},
             judge={"task_result": "SUCCESS", "analysis": ""},
             raw_planner_text=raw_planner_text,
             raw_supervisor_text=raw_supervisor_text,
@@ -517,35 +584,24 @@ async def run_defense_agent_real_once(
             _save_text(log_dir / "real_atomic_actions.py", last_code)
 
             try:
-                _check_generated_code(last_code)
-                syntax_report = {"ok": True, "signal": "SYNTAX_CHECK_OK"}
+                runtime_report = _check_generated_code(last_code)
+                syntax_report = {
+                    "ok": True,
+                    "signal": "SYNTAX_AND_RUNTIME_TOOL_CHECK_OK",
+                    "runtime_tool_check": runtime_report,
+                }
             except Exception:
                 syntax_report = {
                     "ok": False,
-                    "signal": "SYNTAX_CHECK_FAILED",
+                    "signal": "SYNTAX_OR_RUNTIME_TOOL_CHECK_FAILED",
                     "error": traceback.format_exc(),
                 }
             _save_json(attempt_dir / "syntax_check.json", syntax_report)
 
-            if generate_only:
-                last_execution = {"ok": bool(syntax_report.get("ok")), "dry_run": True, "signal": "REAL_CODE_GENERATED_ONLY"}
-                _save_json(attempt_dir / "real_execution.json", last_execution)
-                attempts.append(
-                    {
-                        "atomic_id": atomic_info.get("id", atomic_index),
-                        "attempt": attempt_index,
-                        "syntax": syntax_report,
-                        "execution": last_execution,
-                        "judge": {},
-                    }
-                )
-                atomic_done = bool(syntax_report.get("ok"))
-                break
-
             if not bool(syntax_report.get("ok")):
-                last_execution = {"ok": False, "dry_run": dry_run, "signal": "SYNTAX_CHECK_FAILED"}
+                last_execution = {"ok": False, "signal": "SYNTAX_OR_RUNTIME_TOOL_CHECK_FAILED"}
             else:
-                last_execution = _execute_real_code(code=last_code, controller=controller, dry_run=dry_run)
+                last_execution = _execute_real_code(code=last_code, controller=controller)
             _save_json(attempt_dir / "real_execution.json", last_execution)
             if not bool(last_execution.get("ok")):
                 _save_text(attempt_dir / "real_execution_error.txt", str(last_execution.get("error", "")))
@@ -554,11 +610,8 @@ async def run_defense_agent_real_once(
             after_wrist = attempt_dir / "after_wrist_rgb.png"
             _capture_or_copy_images(
                 capture_images_fn=capture_images_fn,
-                source_front=latest_front,
-                source_wrist=latest_wrist,
                 target_front=after_front,
                 target_wrist=after_wrist,
-                dry_run=dry_run,
             )
 
             judge_prompt = (
@@ -608,17 +661,14 @@ async def run_defense_agent_real_once(
                 "analysis": str(last_judge.get("analysis", "")).strip(),
                 "execution": last_execution,
             }
-            restore_report = _restore_robot_initial_state(controller, initial_robot_state, dry_run=dry_run)
+            restore_report = _restore_robot_initial_state(controller, initial_robot_state)
             _save_json(attempt_dir / "restore_initial_robot_state.json", restore_report)
             restored_front = attempt_dir / "restored_front_rgb.png"
             restored_wrist = attempt_dir / "restored_wrist_rgb.png"
             _capture_or_copy_images(
                 capture_images_fn=capture_images_fn,
-                source_front=latest_front,
-                source_wrist=latest_wrist,
                 target_front=restored_front,
                 target_wrist=restored_wrist,
-                dry_run=dry_run,
             )
             latest_front = restored_front
             latest_wrist = restored_wrist
@@ -661,12 +711,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--robot-ip", default=ROBOT_IP)
     parser.add_argument("--robotiq-urscript-defs-path", default="")
     parser.add_argument("--strict-gripper-connection", action="store_true")
-    parser.add_argument("--dry-run", action="store_true", help="Generate and judge flow without connecting to UR7e.")
-    parser.add_argument(
-        "--generate-only",
-        action="store_true",
-        help="Run supervisor/coder generation only, then exit before code execution and judging.",
-    )
     parser.add_argument(
         "--capture-only",
         action="store_true",
@@ -697,13 +741,11 @@ async def _main_async() -> int:
     current_wrist = run_dir / "current_wrist_rgb.png"
     serials = [s.strip() for s in str(args.camera_serials).split(",") if s.strip()]
 
-    controller: UR7eVectorController | None = None
-    if not args.dry_run:
-        controller = UR7eVectorController(
-            robot_ip=str(args.robot_ip),
-            robotiq_urscript_defs_path=str(args.robotiq_urscript_defs_path).strip() or None,
-            strict_gripper_connection=bool(args.strict_gripper_connection),
-        )
+    controller = UR7eVectorController(
+        robot_ip=str(args.robot_ip),
+        robotiq_urscript_defs_path=str(args.robotiq_urscript_defs_path).strip() or None,
+        strict_gripper_connection=bool(args.strict_gripper_connection),
+    )
 
     source_front = _resolve_path(args.current_front_image) if args.current_front_image else None
     source_wrist = _resolve_path(args.current_wrist_image) if args.current_wrist_image else None
@@ -719,35 +761,44 @@ async def _main_async() -> int:
         current_front = source_front
         current_wrist = source_wrist
 
-        try:
-            if controller is not None:
+        _log("Starting RealSense capture for post-execution feedback")
+        with RealSenseRGBPair(
+            serials=serials,
+            width=int(args.camera_width),
+            height=int(args.camera_height),
+            fps=int(args.camera_fps),
+            warmup_frames=int(args.camera_warmup_frames),
+        ) as cameras:
+            try:
                 _log(f"Connecting UR7e controller at {args.robot_ip}")
                 controller.connect()
                 if controller.is_gripper_available():
                     _log(f"Gripper backend: {controller.get_gripper_backend()}")
 
-            outputs = await run_defense_agent_real_once(
-                task=str(args.task).strip(),
-                current_front_image=current_front,
-                current_wrist_image=current_wrist,
-                planner_profile=planner_profile,
-                supervisor_profile=supervisor_profile,
-                coder_profile=coder_profile,
-                judger_profile=judger_profile,
-                log_dir=run_dir,
-                controller=controller,
-                dry_run=bool(args.dry_run),
-                generate_only=bool(args.generate_only),
-                max_steps=args.max_steps,
-                max_attempts_per_atomic=int(args.max_attempts_per_atomic),
-                embedding_model=str(args.embedding_model),
-                embedding_api_key=args.embedding_api_key,
-                embedding_base_url=args.embedding_base_url,
-                embedding_dims=int(args.embedding_dims),
-                capture_images_fn=None,
-            )
-        finally:
-            if controller is not None:
+                def capture_images(front_path: Path, wrist_path: Path) -> None:
+                    front_done, wrist_done = cameras.capture()
+                    imageio.imwrite(front_path, front_done)
+                    imageio.imwrite(wrist_path, wrist_done)
+
+                outputs = await run_defense_agent_real_once(
+                    task=str(args.task).strip(),
+                    current_front_image=current_front,
+                    current_wrist_image=current_wrist,
+                    planner_profile=planner_profile,
+                    supervisor_profile=supervisor_profile,
+                    coder_profile=coder_profile,
+                    judger_profile=judger_profile,
+                    log_dir=run_dir,
+                    controller=controller,
+                    max_steps=args.max_steps,
+                    max_attempts_per_atomic=int(args.max_attempts_per_atomic),
+                    embedding_model=str(args.embedding_model),
+                    embedding_api_key=args.embedding_api_key,
+                    embedding_base_url=args.embedding_base_url,
+                    embedding_dims=int(args.embedding_dims),
+                    capture_images_fn=capture_images,
+                )
+            finally:
                 controller.close()
 
         summary = {
@@ -794,11 +845,10 @@ async def _main_async() -> int:
             return 0
 
         try:
-            if controller is not None:
-                _log(f"Connecting UR7e controller at {args.robot_ip}")
-                controller.connect()
-                if controller.is_gripper_available():
-                    _log(f"Gripper backend: {controller.get_gripper_backend()}")
+            _log(f"Connecting UR7e controller at {args.robot_ip}")
+            controller.connect()
+            if controller.is_gripper_available():
+                _log(f"Gripper backend: {controller.get_gripper_backend()}")
 
             def capture_images(front_path: Path, wrist_path: Path) -> None:
                 front_done, wrist_done = cameras.capture()
@@ -815,8 +865,6 @@ async def _main_async() -> int:
                 judger_profile=judger_profile,
                 log_dir=run_dir,
                 controller=controller,
-                dry_run=bool(args.dry_run),
-                generate_only=bool(args.generate_only),
                 max_steps=args.max_steps,
                 max_attempts_per_atomic=int(args.max_attempts_per_atomic),
                 embedding_model=str(args.embedding_model),
@@ -827,8 +875,7 @@ async def _main_async() -> int:
             )
 
         finally:
-            if controller is not None:
-                controller.close()
+            controller.close()
 
     summary = {
         "run_dir": str(run_dir),

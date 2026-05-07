@@ -24,8 +24,10 @@ Hard rules:
 8. Wrist image axes map to gripper axes: image right is gripper +X, image down
    is gripper +Y, and the wrist camera viewing direction is gripper +Z.
 9. When atomic info names a primitive skill such as `pick_place`, follow
-   `primitive-skill-contract` and emit the full required phase sequence for that
-   skill.
+   `primitive-skill-contract` and expand it into the full required
+   `move_ee`/`gripper_control` phase sequence. Primitive skill names are task
+   labels only; do not call `pick_place`, `pick_and_place`, `push`, `pull`,
+   `press`, `open`, `close`, or `pour` as functions.
 10. Use slow, object-safe motion. Overall movement must be conservative; when
     approaching, descending to, grasping, pushing, placing, releasing, or
     otherwise interacting with an object, slow down further by using smaller
@@ -37,6 +39,8 @@ Hard rules:
    keeping the primitive skill and target state aligned with the atomic info.
 13. Use `move_ee` for all incremental motion. Do not call `move_to`; it is not
    available in the generated-code runtime API.
+14. Before the final answer, call `validate_runtime_tool_calls(code)` in
+   addition to the syntax/forbidden-token checks.
 
 The orchestrator performs AST syntax validation before execution; still call the
 available contract tools when preparing the answer.

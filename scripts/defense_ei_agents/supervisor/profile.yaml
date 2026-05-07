@@ -1,9 +1,9 @@
 agent:
   llm:
-    provider: qwen
-    model: qwen3.5-397b-a17b
-    base_url: https://openrouter.ai/api/v1
-    api_key: 
+    provider:
+    model:
+    base_url:
+    api_key:
   id: "defense_ei_supervisor"
   name: "Defense EI Atomic Task Supervisor"
   traits: "robotics atomic-task information writer, strict JSON output"

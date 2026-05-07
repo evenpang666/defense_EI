@@ -38,6 +38,10 @@ Use this contract when the atomic task info contains a `primitive`,
 - Every stage must start with
   `# === DEFENSE_EI_PHASE: <slug> | <short goal> ===`.
 - Keep the gripper state explicit before and after contact.
+- Primitive names are never callable runtime APIs. Do not call `pick_place`,
+  `pick_and_place`, `push`, `pull`, `press`, `open`, `close`, or `pour`; use
+  the pseudocode templates below and emit real `move_ee`, `gripper_control`,
+  and `sleep` calls.
 
 ## `pick_place` / `pick_and_place`
 
@@ -84,3 +88,173 @@ For container targets such as beakers, cups, bins, or bowls:
 
 Do not skip `open_gripper` before descent or `lift_to_safe_height` before
 horizontal transfer.
+
+Pseudocode template:
+
+```python
+# === DEFENSE_EI_PHASE: approach_source_above | align above source using small wrist-frame corrections ===
+move_ee(...); sleep(...)
+# === DEFENSE_EI_PHASE: open_gripper | prepare for grasp ===
+gripper_control(0, 120); sleep(...)
+# === DEFENSE_EI_PHASE: descend_to_source | slow vertical descent ===
+move_ee(...); sleep(...)
+# === DEFENSE_EI_PHASE: grasp_source | close on object and settle ===
+gripper_control(255, 250); sleep(...)
+# === DEFENSE_EI_PHASE: lift_to_safe_height | lift before horizontal transfer ===
+move_ee(...); sleep(...)
+# === DEFENSE_EI_PHASE: transfer_above_target | horizontal transfer at safe height ===
+move_ee(...); sleep(...)
+# === DEFENSE_EI_PHASE: descend_to_target | slow vertical placement ===
+move_ee(...); sleep(...)
+# === DEFENSE_EI_PHASE: release_at_target | release object ===
+gripper_control(0, 180); sleep(...)
+# === DEFENSE_EI_PHASE: retract_up | retreat vertically ===
+move_ee(...); sleep(...)
+```
+
+## `push`
+
+Push is a contact translation using a closed or partially closed gripper as a
+pusher. Required phase order:
+
+- `approach_push_start`
+- `set_push_contact_shape`
+- `descend_or_advance_to_contact`
+- `push_slowly`
+- `retract_from_contact`
+
+Pseudocode template:
+
+```python
+# === DEFENSE_EI_PHASE: approach_push_start | align gripper before contact ===
+move_ee(...); sleep(...)
+# === DEFENSE_EI_PHASE: set_push_contact_shape | make a stable pushing surface ===
+gripper_control(180, 120); sleep(...)
+# === DEFENSE_EI_PHASE: descend_or_advance_to_contact | slow contact approach ===
+move_ee(...); sleep(...)
+# === DEFENSE_EI_PHASE: push_slowly | translate object in small increments ===
+move_ee(...); sleep(...)
+move_ee(...); sleep(...)
+# === DEFENSE_EI_PHASE: retract_from_contact | back away from object ===
+move_ee(...); sleep(...)
+```
+
+## `pull`
+
+Pull requires contact or grasp before moving opposite the intended contact
+direction. Required phase order:
+
+- `approach_pull_contact`
+- `grasp_or_hook`
+- `pull_slowly`
+- `release_if_grasped`
+- `retract_from_contact`
+
+Pseudocode template:
+
+```python
+# === DEFENSE_EI_PHASE: approach_pull_contact | align to pull feature ===
+move_ee(...); sleep(...)
+# === DEFENSE_EI_PHASE: grasp_or_hook | secure contact before pulling ===
+gripper_control(255, 220); sleep(...)
+# === DEFENSE_EI_PHASE: pull_slowly | pull with short conservative increments ===
+move_ee(...); sleep(...)
+move_ee(...); sleep(...)
+# === DEFENSE_EI_PHASE: release_if_grasped | let go after pull ===
+gripper_control(0, 150); sleep(...)
+# === DEFENSE_EI_PHASE: retract_from_contact | retreat from manipulated object ===
+move_ee(...); sleep(...)
+```
+
+## `press`
+
+Press is a short approach, slow normal contact, brief hold, and retraction.
+Required phase order:
+
+- `approach_press_target`
+- `set_press_contact_shape`
+- `press_slowly`
+- `hold_press`
+- `retract_from_press`
+
+Pseudocode template:
+
+```python
+# === DEFENSE_EI_PHASE: approach_press_target | align to button or target surface ===
+move_ee(...); sleep(...)
+# === DEFENSE_EI_PHASE: set_press_contact_shape | close gripper for stable contact ===
+gripper_control(255, 120); sleep(...)
+# === DEFENSE_EI_PHASE: press_slowly | press along observed normal in small increments ===
+move_ee(...); sleep(...)
+# === DEFENSE_EI_PHASE: hold_press | keep contact briefly ===
+sleep(...)
+# === DEFENSE_EI_PHASE: retract_from_press | move back along approach direction ===
+move_ee(...); sleep(...)
+```
+
+## `open` / `close`
+
+Open and close articulated objects with a grasp/hook, small rotational or arc
+increments, then release. Required phase order:
+
+- `approach_handle_or_lid`
+- `grasp_or_hook_articulation`
+- `articulate_slowly`
+- `release_articulation`
+- `retract_from_articulation`
+
+Pseudocode template:
+
+```python
+# === DEFENSE_EI_PHASE: approach_handle_or_lid | align to articulated feature ===
+move_ee(...); sleep(...)
+# === DEFENSE_EI_PHASE: grasp_or_hook_articulation | secure the feature ===
+gripper_control(255, 220); sleep(...)
+# === DEFENSE_EI_PHASE: articulate_slowly | move through small arc increments ===
+move_ee(...); sleep(...)
+move_ee(...); sleep(...)
+# === DEFENSE_EI_PHASE: release_articulation | release after target state is reached ===
+gripper_control(0, 150); sleep(...)
+# === DEFENSE_EI_PHASE: retract_from_articulation | retreat without bumping object ===
+move_ee(...); sleep(...)
+```
+
+## `pour`
+
+Pour is grasp, lift, transfer above target, tilt in small increments, pause,
+untilt, then place/release or retreat according to the atomic task. Required
+phase order:
+
+- `approach_source_above`
+- `grasp_source`
+- `lift_to_pour_height`
+- `transfer_above_target`
+- `tilt_to_pour`
+- `hold_pour`
+- `untilt`
+- `return_or_release_source`
+- `retract_up`
+
+Pseudocode template:
+
+```python
+# === DEFENSE_EI_PHASE: approach_source_above | align above source container ===
+move_ee(...); sleep(...)
+# === DEFENSE_EI_PHASE: grasp_source | close and settle grasp ===
+gripper_control(255, 250); sleep(...)
+# === DEFENSE_EI_PHASE: lift_to_pour_height | lift clear of table and obstacles ===
+move_ee(...); sleep(...)
+# === DEFENSE_EI_PHASE: transfer_above_target | move above receiving container ===
+move_ee(...); sleep(...)
+# === DEFENSE_EI_PHASE: tilt_to_pour | tilt slowly over target opening ===
+move_ee(...); sleep(...)
+move_ee(...); sleep(...)
+# === DEFENSE_EI_PHASE: hold_pour | maintain tilt briefly ===
+sleep(...)
+# === DEFENSE_EI_PHASE: untilt | rotate back slowly ===
+move_ee(...); sleep(...)
+# === DEFENSE_EI_PHASE: return_or_release_source | return source if required ===
+move_ee(...); sleep(...)
+# === DEFENSE_EI_PHASE: retract_up | retreat safely ===
+move_ee(...); sleep(...)
+```

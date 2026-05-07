@@ -14,14 +14,7 @@ Primitive APIs:
 2. `gripper_control(value, delay)` - Robotiq command, 0=open and 255=closed; delay in ms.
 3. `ee_pose() -> pose_vec` - current TCP pose as `[x,y,z,rx,ry,rz]`.
 
-Composite APIs:
-- `pick_and_place(...)` and alias `pick_place(...)`
-- `push(...)`
-- `pull(...)`
-- `press(...)`
-- `open(...)`
-- `close(...)`
-- `pour(...)`
+Convenience APIs:
 - `move_x(...)`, `move_y(...)`, `move_z(...)`
 - `rotate_x(...)`, `rotate_y(...)`, `rotate_z(...)`
 - `sleep(seconds)`
@@ -40,6 +33,9 @@ Generation rules:
   not available in generated-code runtime API.
 - If the atomic task names a primitive skill, follow `primitive-skill-contract`
   for the required phase order and motion decomposition.
+- Primitive skill names are labels, not runtime APIs. Do not call
+  `pick_place`, `pick_and_place`, `push`, `pull`, `press`, `open`, `close`, or
+  `pour`; expand the primitive into low-level motion phases.
 - Do not invent exact object coordinates from RGB images alone.
 - Use small relative motions, slow contact, and explicit gripper commands.
 - Overall motion must be slow enough to protect real objects. Prefer many small
