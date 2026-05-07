@@ -57,7 +57,7 @@ conda install ffmpeg=7.1.1 -c conda-forge
 pip install uv
 cd third_party/lerobot
 uv pip install -e .[pi]
-uv pip install torch==2.9.1 torchvision==0.24.1 gradio mujoco ffmpeg openai peft torchcodec imageio[ffmpeg] imageio[pyav] num2words
+uv pip install torch==2.9.1 torchvision==0.24.1 gradio mujoco ffmpeg openai peft torchcodec imageio[ffmpeg] imageio[pyav] num2words ur-rtde pyrealsense2
 ```
 
 Set LLM env vars for EvoMa generation and judging:
