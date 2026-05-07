@@ -4,7 +4,7 @@ Example: control a UR7e with a 7D end-effector delta vector from a PC.
 Vector format:
     [dx, dy, dz, droll, dpitch, dyaw, g]
 where:
-    - dx,dy,dz are TCP position increments in meters
+    - dx,dy,dz are TCP position increments in millimeters in the gripper frame
     - droll,dpitch,dyaw are TCP orientation increments in radians
     - g is gripper command in [0.0, 1.0]
       0.0 -> fully open, 1.0 -> fully close
@@ -32,7 +32,7 @@ import math
 import threading
 from typing import Any, Iterable, Sequence
 
-ROBOT_IP = "169.254.134.8"
+ROBOT_IP = "169.254.26.10"
 URSCRIPT_PORT = 30003
 URSCRIPT_SECONDARY_PORT = 30002
 RTDE_PORT = 30004
@@ -113,95 +113,86 @@ class _RobotiqSocketClient:
             raise RuntimeError(f"Unexpected gripper response: {resp}") from exc
 
 
-def _normalize_quaternion(quat_xyzw: Sequence[float]) -> list[float]:
-    x, y, z, w = [float(v) for v in quat_xyzw]
-    n = math.sqrt(x * x + y * y + z * z + w * w)
-    if n < 1e-12:
-        return [0.0, 0.0, 0.0, 1.0]
-    return [x / n, y / n, z / n, w / n]
+def _pose_vec_from_parts(pos: Sequence[float], rotvec: Sequence[float]) -> list[float]:
+    if len(pos) != 3:
+        raise ValueError(f"Expected 3 position values, got {len(pos)}")
+    if len(rotvec) != 3:
+        raise ValueError(f"Expected 3 rotation-vector values, got {len(rotvec)}")
+    return [
+        float(pos[0]),
+        float(pos[1]),
+        float(pos[2]),
+        float(rotvec[0]),
+        float(rotvec[1]),
+        float(rotvec[2]),
+    ]
 
 
-def _quat_multiply(q1_xyzw: Sequence[float], q2_xyzw: Sequence[float]) -> list[float]:
-    x1, y1, z1, w1 = _normalize_quaternion(q1_xyzw)
-    x2, y2, z2, w2 = _normalize_quaternion(q2_xyzw)
-    x = w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2
-    y = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2
-    z = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
-    w = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2
-    return _normalize_quaternion([x, y, z, w])
-
-
-def _rotvec_to_quat(rotvec_xyz: Sequence[float]) -> list[float]:
-    rx, ry, rz = [float(v) for v in rotvec_xyz]
+def _rotvec_to_matrix(rotvec: Sequence[float]) -> list[list[float]]:
+    rx, ry, rz = [float(v) for v in rotvec]
     theta = math.sqrt(rx * rx + ry * ry + rz * rz)
     if theta < 1e-12:
-        return [0.0, 0.0, 0.0, 1.0]
-    ax, ay, az = rx / theta, ry / theta, rz / theta
-    half = 0.5 * theta
-    s = math.sin(half)
-    return [ax * s, ay * s, az * s, math.cos(half)]
+        return [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+
+    x, y, z = rx / theta, ry / theta, rz / theta
+    c = math.cos(theta)
+    s = math.sin(theta)
+    one_c = 1.0 - c
+    return [
+        [c + x * x * one_c, x * y * one_c - z * s, x * z * one_c + y * s],
+        [y * x * one_c + z * s, c + y * y * one_c, y * z * one_c - x * s],
+        [z * x * one_c - y * s, z * y * one_c + x * s, c + z * z * one_c],
+    ]
 
 
-def _euler_delta_to_quat(roll: float, pitch: float, yaw: float) -> list[float]:
-    qx = _rotvec_to_quat([roll, 0.0, 0.0])
-    qy = _rotvec_to_quat([0.0, pitch, 0.0])
-    qz = _rotvec_to_quat([0.0, 0.0, yaw])
-    return _quat_multiply(qz, _quat_multiply(qy, qx))
+def _matvec(matrix: Sequence[Sequence[float]], vector: Sequence[float]) -> list[float]:
+    return [
+        float(matrix[0][0]) * float(vector[0]) + float(matrix[0][1]) * float(vector[1]) + float(matrix[0][2]) * float(vector[2]),
+        float(matrix[1][0]) * float(vector[0]) + float(matrix[1][1]) * float(vector[1]) + float(matrix[1][2]) * float(vector[2]),
+        float(matrix[2][0]) * float(vector[0]) + float(matrix[2][1]) * float(vector[1]) + float(matrix[2][2]) * float(vector[2]),
+    ]
 
 
-def _quat_to_rotvec(quat_xyzw: Sequence[float]) -> list[float]:
-    x, y, z, w = _normalize_quaternion(quat_xyzw)
-    sin_half = math.sqrt(x * x + y * y + z * z)
-    if sin_half < 1e-12:
-        return [0.0, 0.0, 0.0]
+def _extract_pose_vec(pose: Any, fallback_pose_vec: Sequence[float]) -> list[float]:
+    fallback = [float(v) for v in fallback_pose_vec[:6]]
+    if len(fallback) != 6:
+        raise ValueError(f"Expected 6 fallback pose values, got {len(fallback_pose_vec)}")
 
-    angle = 2.0 * math.atan2(sin_half, w)
-    ax, ay, az = x / sin_half, y / sin_half, z / sin_half
-    return [ax * angle, ay * angle, az * angle]
-
-
-def _quat_xyzw_to_wxyz(quat_xyzw: Sequence[float]) -> list[float]:
-    x, y, z, w = _normalize_quaternion(quat_xyzw)
-    return [w, x, y, z]
-
-
-def _quat_wxyz_to_xyzw(quat_wxyz: Sequence[float]) -> list[float]:
-    w, x, y, z = [float(v) for v in quat_wxyz]
-    return _normalize_quaternion([x, y, z, w])
-
-
-def _extract_pose(pose: Any, fallback_pos: Sequence[float], fallback_quat_wxyz: Sequence[float]) -> tuple[list[float], list[float]]:
+    if pose is None:
+        return fallback
     if isinstance(pose, dict):
-        pos = pose.get("pos", pose.get("position", fallback_pos))
-        quat = pose.get("quat", pose.get("quaternion", fallback_quat_wxyz))
-    elif isinstance(pose, (list, tuple)) and len(pose) >= 2:
-        pos, quat = pose[0], pose[1]
-    else:
-        pos, quat = fallback_pos, fallback_quat_wxyz
-    return (
-        [float(pos[0]), float(pos[1]), float(pos[2])],
-        [float(quat[0]), float(quat[1]), float(quat[2]), float(quat[3])],
-    )
+        raw_pose = pose.get("pose_vec", pose.get("tcp_pose", pose.get("pose_vector")))
+        if raw_pose is not None:
+            return [float(v) for v in raw_pose[:6]]
+        pos = pose.get("pos", pose.get("position", fallback[:3]))
+        rotvec = pose.get("rotvec", pose.get("rotation_vector", pose.get("rotation", fallback[3:6])))
+        return _pose_vec_from_parts(pos, rotvec)
+    if isinstance(pose, (list, tuple)):
+        if len(pose) == 6:
+            return [float(v) for v in pose]
+        if len(pose) >= 2:
+            return _pose_vec_from_parts(pose[0], pose[1])
+    return fallback
 
 
 def _target_from_pose_or_offset(
     target_pose: Any,
-    src_pos: Sequence[float],
-    src_quat_wxyz: Sequence[float],
+    src_pose_vec: Sequence[float],
     direction_x: float,
     direction_y: float,
     direction_z: float,
-) -> tuple[list[float], list[float]]:
+) -> list[float]:
     if target_pose is not None:
-        return _extract_pose(target_pose, src_pos, src_quat_wxyz)
-    return (
-        [
-            float(src_pos[0]) + float(direction_x),
-            float(src_pos[1]) + float(direction_y),
-            float(src_pos[2]) + float(direction_z),
-        ],
-        [float(src_quat_wxyz[0]), float(src_quat_wxyz[1]), float(src_quat_wxyz[2]), float(src_quat_wxyz[3])],
-    )
+        return _extract_pose_vec(target_pose, src_pose_vec)
+    pose_vec = [float(v) for v in src_pose_vec[:6]]
+    pose_vec[0] += float(direction_x)
+    pose_vec[1] += float(direction_y)
+    pose_vec[2] += float(direction_z)
+    return pose_vec
 
 
 class UR7eVectorController:
@@ -213,8 +204,8 @@ class UR7eVectorController:
         rtde_port: int = RTDE_PORT,
         robotiq_port: int = ROBOTIQ_PORT,
         robotiq_urscript_defs_path: str | None = None,
-        timeout_s: float = 2.0,
-        strict_gripper_connection: bool = False,
+        timeout_s: float = 3.0,
+        strict_gripper_connection: bool = True,
     ) -> None:
         self.robot_ip = robot_ip
         self.urscript_port = urscript_port
@@ -436,6 +427,7 @@ class UR7eVectorController:
         acceleration: float = 1.2,
         velocity: float = 0.5,
         blend_radius: float = 0.0,
+        wait_after_arm_s: float = 0.2,
     ) -> None:
         if len(joints_rad) != 6:
             raise ValueError(f"Expected 6 joint values, got {len(joints_rad)}")
@@ -445,6 +437,7 @@ class UR7eVectorController:
             f"movej([{q_str}], a={acceleration:.3f}, v={velocity:.3f}, r={blend_radius:.3f})"
         )
         self._send_urscript(script)
+        time.sleep(max(0.0, float(wait_after_arm_s)))
 
     def get_current_joints(self) -> list[float]:
         self._ensure_connected()
@@ -482,15 +475,14 @@ class UR7eVectorController:
 
     def get_current_ee_pose_vector(self) -> list[float]:
         """
-        Returns [x, y, z, qx, qy, qz, qw, g].
+        Returns [x, y, z, rx, ry, rz, g].
         - Position unit: meters
-        - Quaternion: xyzw
+        - Rotation vector unit: radians, matching UR RTDE getActualTCPPose()
         - g in [0, 1]
         """
         tcp = self.get_current_tcp_pose()
-        quat = _rotvec_to_quat(tcp[3:6])
         g = self.get_gripper_open_ratio()
-        return [tcp[0], tcp[1], tcp[2], quat[0], quat[1], quat[2], quat[3], g]
+        return [tcp[0], tcp[1], tcp[2], tcp[3], tcp[4], tcp[5], g]
 
     def set_gripper(self, g: float, speed: int = 255, force: int = 120) -> None:
         # Map g in [0,1] to Robotiq position [0,255].
@@ -520,35 +512,29 @@ class UR7eVectorController:
         self._gripper_client.move(position, speed=speed, force=force)
         self._last_gripper_open_ratio = g
 
-    def ee_pose(self) -> tuple[list[float], list[float]]:
+    def ee_pose(self) -> list[float]:
         """
-        Real-runtime API: return current TCP pose as (pos_xyz, quat_wxyz).
-
-        Generated real-world code should use quaternion order (w, x, y, z),
-        matching the simulation atomic-code contract.
+        Real-runtime API: return current TCP pose as [x, y, z, rx, ry, rz].
         """
         ee = self.get_current_ee_pose_vector()
-        return [float(ee[0]), float(ee[1]), float(ee[2])], _quat_xyzw_to_wxyz(ee[3:7])
+        return [float(v) for v in ee[:6]]
 
     def move_to(
         self,
-        pos: Sequence[float],
-        quat: Sequence[float] | None = None,
+        pose_vec: Sequence[float],
         num_steps: int = 100,
     ) -> None:
         """
-        Real-runtime API: move TCP to absolute world pose.
+        Real-runtime API: move TCP to absolute Cartesian pose vector.
 
         Args:
-            pos: [x, y, z] in meters.
-            quat: [w, x, y, z]. If omitted, preserve current TCP orientation.
+            pose_vec: [x, y, z, rx, ry, rz], where xyz is meters and rx/ry/rz
+                is the UR rotation vector in radians.
             num_steps: Accepted for compatibility with simulation code; real
                 execution uses UR movel velocity/acceleration limits.
         """
         del num_steps
-        if quat is None:
-            _, quat = self.ee_pose()
-        self.move_ee_pose(pos, _quat_wxyz_to_xyzw(quat), acceleration=0.4, velocity=0.10)
+        self.move_tcp_pose_vector(pose_vec, acceleration=0.2, velocity=0.05)
 
     def move_ee(
         self,
@@ -558,26 +544,34 @@ class UR7eVectorController:
         droll: float = 0.0,
         dpitch: float = 0.0,
         dyaw: float = 0.0,
-        steps: int = 100,
+        *,
+        velocity: float = 0.04,
+        acceleration: float = 0.18,
+        wait_after_arm_s: float = 0.2,
     ) -> None:
         """
         Real-runtime API: relative TCP delta.
 
-        Rotation inputs are degrees to match the simulation runtime API.
+        Translation inputs are millimeters in the gripper local frame:
+        +X is right in the wrist image, +Y is down in the wrist image, and +Z is
+        the wrist camera viewing direction. Rotation inputs are radians.
+        Real hardware executes one UR movel command, so there is no steps
+        parameter. Use low velocity/acceleration and wait_after_arm_s for safe,
+        settled motion.
         """
-        del steps
         self.send_ee_delta_vector(
             [
                 float(dx),
                 float(dy),
                 float(dz),
-                math.radians(float(droll)),
-                math.radians(float(dpitch)),
-                math.radians(float(dyaw)),
+                float(droll),
+                float(dpitch),
+                float(dyaw),
                 self.get_gripper_open_ratio(),
             ],
-            acceleration=0.4,
-            velocity=0.10,
+            acceleration=float(acceleration),
+            velocity=float(velocity),
+            wait_after_arm_s=float(wait_after_arm_s),
         )
 
     def gripper_control(self, value: float, delay: int = 50) -> None:
@@ -589,23 +583,23 @@ class UR7eVectorController:
         self.set_gripper(_clamp(float(value) / 255.0, 0.0, 1.0))
         time.sleep(max(0.0, float(delay)) / 1000.0)
 
-    def move_x(self, distance: float = 0.05, steps: int = 120) -> None:
-        self.move_ee(dx=float(distance), dy=0.0, dz=0.0, steps=int(steps))
+    def move_x(self, distance: float = 50.0, velocity: float = 0.04, acceleration: float = 0.18) -> None:
+        self.move_ee(dx=float(distance), dy=0.0, dz=0.0, velocity=float(velocity), acceleration=float(acceleration))
 
-    def move_y(self, distance: float = 0.05, steps: int = 120) -> None:
-        self.move_ee(dx=0.0, dy=float(distance), dz=0.0, steps=int(steps))
+    def move_y(self, distance: float = 50.0, velocity: float = 0.04, acceleration: float = 0.18) -> None:
+        self.move_ee(dx=0.0, dy=float(distance), dz=0.0, velocity=float(velocity), acceleration=float(acceleration))
 
-    def move_z(self, distance: float = 0.05, steps: int = 120) -> None:
-        self.move_ee(dx=0.0, dy=0.0, dz=float(distance), steps=int(steps))
+    def move_z(self, distance: float = 50.0, velocity: float = 0.04, acceleration: float = 0.18) -> None:
+        self.move_ee(dx=0.0, dy=0.0, dz=float(distance), velocity=float(velocity), acceleration=float(acceleration))
 
-    def rotate_x(self, angle_deg: float = 10.0, steps: int = 120) -> None:
-        self.move_ee(droll=float(angle_deg), steps=int(steps))
+    def rotate_x(self, angle_rad: float = 0.17, velocity: float = 0.04, acceleration: float = 0.18) -> None:
+        self.move_ee(droll=float(angle_rad), velocity=float(velocity), acceleration=float(acceleration))
 
-    def rotate_y(self, angle_deg: float = 10.0, steps: int = 120) -> None:
-        self.move_ee(dpitch=float(angle_deg), steps=int(steps))
+    def rotate_y(self, angle_rad: float = 0.17, velocity: float = 0.04, acceleration: float = 0.18) -> None:
+        self.move_ee(dpitch=float(angle_rad), velocity=float(velocity), acceleration=float(acceleration))
 
-    def rotate_z(self, angle_deg: float = 10.0, steps: int = 120) -> None:
-        self.move_ee(dyaw=float(angle_deg), steps=int(steps))
+    def rotate_z(self, angle_rad: float = 0.17, velocity: float = 0.04, acceleration: float = 0.18) -> None:
+        self.move_ee(dyaw=float(angle_rad), velocity=float(velocity), acceleration=float(acceleration))
 
     def pick_and_place(
         self,
@@ -621,28 +615,30 @@ class UR7eVectorController:
         move_steps: int = 120,
         grip_delay: int = 80,
     ) -> None:
-        cur_pos, cur_quat = self.ee_pose()
-        src_pos, src_quat = _extract_pose(object_pose, cur_pos, cur_quat)
-        dst_pos, _ = _target_from_pose_or_offset(
+        cur_pose = self.ee_pose()
+        src_pose = _extract_pose_vec(object_pose, cur_pose)
+        dst_pose = _target_from_pose_or_offset(
             target_pose,
-            src_pos,
-            src_quat,
+            src_pose,
             direction_x,
             direction_y,
             direction_z,
         )
+        src_pos = src_pose[:3]
+        src_rotvec = src_pose[3:6]
+        dst_pos = dst_pose[:3]
         carry_z = src_pos[2] + float(lift_height)
         retreat_z = max(carry_z, dst_pos[2] + float(approach_height))
 
         self.gripper_control(float(release_value), delay=int(grip_delay))
-        self.move_to([src_pos[0], src_pos[1], src_pos[2] + float(approach_height)], src_quat, num_steps=int(move_steps))
-        self.move_to(src_pos, src_quat, num_steps=int(move_steps))
+        self.move_to([src_pos[0], src_pos[1], src_pos[2] + float(approach_height), *src_rotvec], num_steps=int(move_steps))
+        self.move_to(src_pose, num_steps=int(move_steps))
         self.gripper_control(float(grasp_value), delay=int(grip_delay))
-        self.move_to([src_pos[0], src_pos[1], carry_z], src_quat, num_steps=int(move_steps))
-        self.move_to([dst_pos[0], dst_pos[1], carry_z], src_quat, num_steps=int(move_steps))
-        self.move_to(dst_pos, src_quat, num_steps=int(move_steps))
+        self.move_to([src_pos[0], src_pos[1], carry_z, *src_rotvec], num_steps=int(move_steps))
+        self.move_to([dst_pos[0], dst_pos[1], carry_z, *src_rotvec], num_steps=int(move_steps))
+        self.move_to([dst_pos[0], dst_pos[1], dst_pos[2], *src_rotvec], num_steps=int(move_steps))
         self.gripper_control(float(release_value), delay=int(grip_delay))
-        self.move_to([dst_pos[0], dst_pos[1], retreat_z], src_quat, num_steps=int(move_steps))
+        self.move_to([dst_pos[0], dst_pos[1], retreat_z, *src_rotvec], num_steps=int(move_steps))
 
     def pick_place(self, *args: Any, **kwargs: Any) -> None:
         self.pick_and_place(*args, **kwargs)
@@ -657,13 +653,15 @@ class UR7eVectorController:
         move_steps: int = 100,
         grip_delay: int = 60,
     ) -> None:
-        cur_pos, cur_quat = self.ee_pose()
-        tgt_pos, tgt_quat = _extract_pose(target_pose if target_pose is not None else object_pose, cur_pos, cur_quat)
+        cur_pose = self.ee_pose()
+        tgt_pose = _extract_pose_vec(target_pose if target_pose is not None else object_pose, cur_pose)
+        tgt_pos = tgt_pose[:3]
+        tgt_rotvec = tgt_pose[3:6]
         if float(approach_height) > 1e-9:
-            self.move_to([tgt_pos[0], tgt_pos[1], tgt_pos[2] + float(approach_height)], tgt_quat, num_steps=int(move_steps))
-        self.move_to(tgt_pos, tgt_quat, num_steps=int(move_steps))
+            self.move_to([tgt_pos[0], tgt_pos[1], tgt_pos[2] + float(approach_height), *tgt_rotvec], num_steps=int(move_steps))
+        self.move_to(tgt_pose, num_steps=int(move_steps))
         self.gripper_control(float(grasp_value), delay=int(grip_delay))
-        self.move_ee(dz=abs(float(push_distance)), steps=int(move_steps))
+        self.move_ee(dz=abs(float(push_distance)) * 1000.0)
 
     def pull(
         self,
@@ -676,13 +674,15 @@ class UR7eVectorController:
         move_steps: int = 100,
         grip_delay: int = 60,
     ) -> None:
-        cur_pos, cur_quat = self.ee_pose()
-        tgt_pos, tgt_quat = _extract_pose(target_pose if target_pose is not None else object_pose, cur_pos, cur_quat)
+        cur_pose = self.ee_pose()
+        tgt_pose = _extract_pose_vec(target_pose if target_pose is not None else object_pose, cur_pose)
+        tgt_pos = tgt_pose[:3]
+        tgt_rotvec = tgt_pose[3:6]
         if float(approach_height) > 1e-9:
-            self.move_to([tgt_pos[0], tgt_pos[1], tgt_pos[2] + float(approach_height)], tgt_quat, num_steps=int(move_steps))
-        self.move_to(tgt_pos, tgt_quat, num_steps=int(move_steps))
+            self.move_to([tgt_pos[0], tgt_pos[1], tgt_pos[2] + float(approach_height), *tgt_rotvec], num_steps=int(move_steps))
+        self.move_to(tgt_pose, num_steps=int(move_steps))
         self.gripper_control(float(grasp_value), delay=int(grip_delay))
-        self.move_ee(dz=-abs(float(pull_distance)), steps=int(move_steps))
+        self.move_ee(dz=-abs(float(pull_distance)) * 1000.0)
         self.gripper_control(float(release_value), delay=int(grip_delay))
 
     def press(
@@ -697,7 +697,11 @@ class UR7eVectorController:
     ) -> None:
         del object_pose
         self.gripper_control(float(grasp_value), delay=int(grip_delay))
-        self.move_ee(dx=float(direction_x), dy=float(direction_y), dz=float(direction_z), steps=int(move_steps))
+        self.move_ee(
+            dx=float(direction_x) * 1000.0,
+            dy=float(direction_y) * 1000.0,
+            dz=float(direction_z) * 1000.0,
+        )
 
     def open(
         self,
@@ -711,11 +715,11 @@ class UR7eVectorController:
         **kwargs: Any,
     ) -> None:
         del rotation_radius, kwargs
-        cur_pos, cur_quat = self.ee_pose()
-        gpos, gquat = _extract_pose(grasp_pose, cur_pos, cur_quat)
-        self.move_to(gpos, gquat, num_steps=int(move_steps))
+        cur_pose = self.ee_pose()
+        grasp_pose_vec = _extract_pose_vec(grasp_pose, cur_pose)
+        self.move_to(grasp_pose_vec, num_steps=int(move_steps))
         self.gripper_control(float(grasp_value), delay=int(grip_delay))
-        self.rotate_y(float(rotation_angle_deg), steps=int(move_steps))
+        self.rotate_y(math.radians(float(rotation_angle_deg)))
         self.gripper_control(float(release_value), delay=int(grip_delay))
 
     def close_articulation(
@@ -729,11 +733,11 @@ class UR7eVectorController:
         **kwargs: Any,
     ) -> None:
         del rotation_radius, kwargs
-        cur_pos, cur_quat = self.ee_pose()
-        gpos, gquat = _extract_pose(grasp_pose, cur_pos, cur_quat)
-        self.move_to(gpos, gquat, num_steps=int(move_steps))
+        cur_pose = self.ee_pose()
+        grasp_pose_vec = _extract_pose_vec(grasp_pose, cur_pose)
+        self.move_to(grasp_pose_vec, num_steps=int(move_steps))
         self.gripper_control(float(grasp_value), delay=int(grip_delay))
-        self.rotate_y(float(rotation_angle_deg), steps=int(move_steps))
+        self.rotate_y(math.radians(float(rotation_angle_deg)))
 
     def pour(
         self,
@@ -752,47 +756,50 @@ class UR7eVectorController:
         move_steps: int = 120,
         grip_delay: int = 80,
     ) -> None:
-        cur_pos, cur_quat = self.ee_pose()
-        src_pos, src_quat = _extract_pose(object_pose, cur_pos, cur_quat)
-        dst_pos, dst_quat = _target_from_pose_or_offset(
+        cur_pose = self.ee_pose()
+        src_pose = _extract_pose_vec(object_pose, cur_pose)
+        dst_pose = _target_from_pose_or_offset(
             target_pose,
-            src_pos,
-            src_quat,
+            src_pose,
             direction_x,
             direction_y,
             direction_z,
         )
-        self.move_to([src_pos[0], src_pos[1], src_pos[2] + float(approach_height)], src_quat, num_steps=int(move_steps))
-        self.move_to(src_pos, src_quat, num_steps=int(move_steps))
+        src_pos = src_pose[:3]
+        src_rotvec = src_pose[3:6]
+        dst_pos = dst_pose[:3]
+        dst_rotvec = dst_pose[3:6]
+        self.move_to([src_pos[0], src_pos[1], src_pos[2] + float(approach_height), *src_rotvec], num_steps=int(move_steps))
+        self.move_to(src_pose, num_steps=int(move_steps))
         self.gripper_control(float(grasp_value), delay=int(grip_delay))
-        self.move_to([src_pos[0], src_pos[1], src_pos[2] + float(lift_height)], src_quat, num_steps=int(move_steps))
-        self.move_to([dst_pos[0], dst_pos[1], dst_pos[2] + float(approach_height)], dst_quat, num_steps=int(move_steps))
-        self.move_to(dst_pos, dst_quat, num_steps=int(move_steps))
-        self.move_ee(droll=float(rot_x), dpitch=float(rot_y), dyaw=float(rot_z), steps=int(move_steps))
+        self.move_to([src_pos[0], src_pos[1], src_pos[2] + float(lift_height), *src_rotvec], num_steps=int(move_steps))
+        self.move_to([dst_pos[0], dst_pos[1], dst_pos[2] + float(approach_height), *dst_rotvec], num_steps=int(move_steps))
+        self.move_to(dst_pose, num_steps=int(move_steps))
+        self.move_ee(
+            droll=math.radians(float(rot_x)),
+            dpitch=math.radians(float(rot_y)),
+            dyaw=math.radians(float(rot_z)),
+        )
         self.gripper_control(float(release_value), delay=int(grip_delay))
 
-    def move_ee_pose(
+    def move_tcp_pose_vector(
         self,
-        position_xyz: Sequence[float],
-        quat_xyzw: Sequence[float],
-        acceleration: float = 0.4,
-        velocity: float = 0.15,
+        pose_vec: Sequence[float],
+        acceleration: float = 0.2,
+        velocity: float = 0.05,
         blend_radius: float = 0.0,
+        wait_after_arm_s: float = 0.2,
     ) -> None:
-        if len(position_xyz) != 3:
-            raise ValueError(f"Expected 3 position values, got {len(position_xyz)}")
-        if len(quat_xyzw) != 4:
-            raise ValueError(f"Expected 4 quaternion values, got {len(quat_xyzw)}")
-
-        rotvec = _quat_to_rotvec(quat_xyzw)
-        x, y, z = [float(v) for v in position_xyz]
-        rx, ry, rz = rotvec
+        if len(pose_vec) != 6:
+            raise ValueError(f"Expected 6 TCP pose values [x,y,z,rx,ry,rz], got {len(pose_vec)}")
+        x, y, z, rx, ry, rz = [float(v) for v in pose_vec]
         script = (
             "movel(p["
             f"{x:.6f}, {y:.6f}, {z:.6f}, {rx:.6f}, {ry:.6f}, {rz:.6f}"
             f"], a={acceleration:.3f}, v={velocity:.3f}, r={blend_radius:.3f})"
         )
         self._send_urscript(script)
+        time.sleep(max(0.0, float(wait_after_arm_s)))
 
     def send_vector(
         self,
@@ -811,9 +818,12 @@ class UR7eVectorController:
         current_joints = self.get_current_joints()
         target_joints = [cur + dq for cur, dq in zip(current_joints, delta_joints)]
 
-        self.move_joints(target_joints, acceleration=acceleration, velocity=velocity)
-        # Small delay so arm and gripper commands do not saturate interfaces.
-        time.sleep(wait_after_arm_s)
+        self.move_joints(
+            target_joints,
+            acceleration=acceleration,
+            velocity=velocity,
+            wait_after_arm_s=wait_after_arm_s,
+        )
         if self._gripper_available:
             self.set_gripper(gripper)
         elif not self._gripper_warned:
@@ -828,21 +838,20 @@ class UR7eVectorController:
     def send_ee_delta_vector(
         self,
         delta7: Iterable[float],
-        acceleration: float = 0.4,
-        velocity: float = 0.15,
+        acceleration: float = 0.18,
+        velocity: float = 0.04,
         wait_after_arm_s: float = 0.2,
     ) -> tuple[list[float], list[float]]:
         """
         EE delta vector format:
             [dx, dy, dz, droll, dpitch, dyaw, g]
         where:
-            - dx,dy,dz are deltas applied to current TCP position
-            - droll,dpitch,dyaw are Euler-angle orientation deltas
-            - quaternion delta composes in base frame: q_target = dq * q_current
+            - dx,dy,dz are millimeter deltas in the gripper local frame
+            - droll,dpitch,dyaw are added to the current UR rotation vector
             - g is an absolute gripper command in [0, 1] range after clamping
 
         Returns:
-            (current_ee, target_ee), each as [x, y, z, qx, qy, qz, qw, g]
+            (current_ee, target_ee), each as [x, y, z, rx, ry, rz, g]
         """
         values = [float(x) for x in delta7]
         if len(values) != 7:
@@ -850,24 +859,28 @@ class UR7eVectorController:
 
         current_ee = self.get_current_ee_pose_vector()
         cur_pos = current_ee[:3]
-        cur_quat = current_ee[3:7]
+        cur_rotvec = current_ee[3:6]
 
-        delta_pos = values[:3]
+        delta_pos_local_m = [v / 1000.0 for v in values[:3]]
+        rot_m = _rotvec_to_matrix(cur_rotvec)
+        delta_pos = _matvec(rot_m, delta_pos_local_m)
         droll, dpitch, dyaw = values[3:6]
         target_g = _clamp(values[6], 0.0, 1.0)
 
         target_pos = [p + dp for p, dp in zip(cur_pos, delta_pos)]
-        delta_quat = _euler_delta_to_quat(droll, dpitch, dyaw)
-        target_quat = _quat_multiply(delta_quat, cur_quat)
+        target_rotvec = [
+            cur_rotvec[0] + droll,
+            cur_rotvec[1] + dpitch,
+            cur_rotvec[2] + dyaw,
+        ]
 
-        self.move_ee_pose(
-            target_pos,
-            target_quat,
+        self.move_tcp_pose_vector(
+            [target_pos[0], target_pos[1], target_pos[2], target_rotvec[0], target_rotvec[1], target_rotvec[2]],
             acceleration=acceleration,
             velocity=velocity,
+            wait_after_arm_s=wait_after_arm_s,
         )
 
-        time.sleep(wait_after_arm_s)
         if self._gripper_available:
             self.set_gripper(target_g)
         elif not self._gripper_warned:
@@ -878,10 +891,9 @@ class UR7eVectorController:
             target_pos[0],
             target_pos[1],
             target_pos[2],
-            target_quat[0],
-            target_quat[1],
-            target_quat[2],
-            target_quat[3],
+            target_rotvec[0],
+            target_rotvec[1],
+            target_rotvec[2],
             target_g,
         ]
         return current_ee, target_ee
@@ -890,8 +902,8 @@ class UR7eVectorController:
 def demo() -> None:
     # EE delta command: [dx, dy, dz, droll, dpitch, dyaw, g]
     command_sequence = [
-        [0.00, 0.00, 0.02, 0.0, 0.0, 0.0, 0.0],
-        [0.00, 0.00, -0.02, 0.0, 0.0, 0.0, 0.0],
+        [0.00, 0.00, 20.0, 0.0, 0.0, 0.0, 1.0],
+        [0.00, 0.00, -20.0, 0.0, 0.0, 0.0, 0.0],
     ]
 
     # If 63352 is blocked, provide local Robotiq definitions script path for URScript fallback.
@@ -900,7 +912,7 @@ def demo() -> None:
     with UR7eVectorController(
         robot_ip=ROBOT_IP,
         robotiq_urscript_defs_path=robotiq_defs_path,
-        strict_gripper_connection=False,
+        strict_gripper_connection=True,
     ) as controller:
         if controller.is_gripper_available():
             print(f"Gripper backend: {controller.get_gripper_backend()}")
@@ -912,7 +924,7 @@ def demo() -> None:
         for idx, vec in enumerate(command_sequence, start=1):
             print(f"Sending EE delta vector #{idx}: {vec}")
             current_pose, target_pose = controller.send_ee_delta_vector(
-                vec, acceleration=0.4, velocity=0.1
+                vec, acceleration=0.18, velocity=0.04
             )
             print(f"Current EE pose before send: {current_pose}")
             print(f"Target EE pose after delta: {target_pose}")
@@ -923,7 +935,6 @@ def make_real_runtime_api(controller: UR7eVectorController) -> dict[str, Any]:
     """Return the restricted real-robot API dictionary for generated code."""
     return {
         "ee_pose": controller.ee_pose,
-        "move_to": controller.move_to,
         "move_ee": controller.move_ee,
         "gripper_control": controller.gripper_control,
         "set_gripper": lambda value: controller.gripper_control(value, delay=1),

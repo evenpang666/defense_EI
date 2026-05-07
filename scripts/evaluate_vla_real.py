@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 import numpy as np
-import torch
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
@@ -209,6 +208,9 @@ class ContinualPolicyLeRobot:
         num_steps: int,
         default_prompt: str | None,
     ) -> None:
+        global torch
+        import torch
+
         del config_name, bank_dir, checkpoint_assets_dir, use_norm_stats
         self._num_steps = max(1, int(num_steps))
         self._default_prompt = default_prompt or ""

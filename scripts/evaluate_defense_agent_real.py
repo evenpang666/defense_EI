@@ -1,12 +1,14 @@
-"""Run one-pass DefenseAgent Evobody validation on a real UR7e setup."""
+"""Run the defense_ei_agents real-world DefenseAgent workflow on a UR7e setup."""
 
 from __future__ import annotations
 
 import argparse
+import ast
 import asyncio
 import json
 import os
 import re
+import shutil
 import sys
 import time
 import traceback
@@ -15,6 +17,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import imageio.v2 as imageio
+import yaml
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -25,15 +28,12 @@ if str(SCRIPT_ROOT) not in sys.path:
 if str(DEFENSE_AGENT_ROOT) not in sys.path:
     sys.path.insert(0, str(DEFENSE_AGENT_ROOT))
 
-from DefenseAgent import AgentConfig, ReActAgent  # noqa: E402
-from DefenseAgent.config import AgentProfile  # noqa: E402
-from DefenseAgent.memory import MemoryBackendConfig  # noqa: E402
-
 from evaluate_vla_real import RealSenseRGBPair  # noqa: E402
 from ur7e_controller import ROBOT_IP, UR7eVectorController, make_real_runtime_api  # noqa: E402
 
 
-DEFAULT_PROFILE_ROOT = PROJECT_ROOT / "scripts" / "evobody_profiles"
+DEFAULT_PROFILE_ROOT = PROJECT_ROOT / "scripts" / "defense_ei_agents"
+DEFAULT_PLANNER_PROFILE = DEFAULT_PROFILE_ROOT / "planner" / "profile.yaml"
 DEFAULT_SUPERVISOR_PROFILE = DEFAULT_PROFILE_ROOT / "supervisor" / "profile.yaml"
 DEFAULT_CODER_PROFILE = DEFAULT_PROFILE_ROOT / "coder" / "profile.yaml"
 DEFAULT_JUDGER_PROFILE = DEFAULT_PROFILE_ROOT / "judger" / "profile.yaml"
@@ -43,9 +43,13 @@ DEFAULT_LOG_ROOT = PROJECT_ROOT / "logs" / "defense_agent_real"
 @dataclass
 class RealDefenseOutputs:
     plan: dict[str, Any]
+    atomic_task_info: dict[str, Any]
+    attempts: list[dict[str, Any]]
+    completed: bool
     code: str
     execution: dict[str, Any]
     judge: dict[str, Any]
+    raw_planner_text: str
     raw_supervisor_text: str
     raw_coder_text: str
     raw_judger_text: str
@@ -71,6 +75,45 @@ def _save_json(path: Path, payload: dict[str, Any]) -> None:
 def _save_text(path: Path, payload: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(payload, encoding="utf-8")
+
+
+def _prepare_real_profile_copy(profile_path: Path, log_dir: Path, role: str) -> Path:
+    """Write a temporary profile with paths resolved inside the run directory."""
+    profile_path = _resolve_path(profile_path)
+    raw = yaml.safe_load(profile_path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict) or not isinstance(raw.get("agent"), dict):
+        raise ValueError(f"Invalid DefenseAgent profile: {profile_path}")
+
+    agent = raw["agent"]
+    tools = agent.get("tools")
+    if not isinstance(tools, dict):
+        return profile_path
+
+    source_dir = profile_path.parent
+
+    def abs_ref(ref: str) -> str:
+        p = Path(str(ref))
+        return str(p if p.is_absolute() else (source_dir / p).resolve())
+
+    tools["skills"] = [abs_ref(ref) for ref in tools.get("skills", [])]
+    tools["python"] = [
+        abs_ref(ref.rsplit(":", 1)[0]) + ":" + ref.rsplit(":", 1)[1]
+        for ref in tools.get("python", [])
+        if ":" in ref
+    ]
+    tools["mcp"] = []
+    tools["allow_skill_execution"] = False
+
+    prompt = agent.get("prompt")
+    if isinstance(prompt, dict) and isinstance(prompt.get("path"), str):
+        prompt_path = Path(prompt["path"])
+        if not prompt_path.is_absolute():
+            prompt["path"] = str((source_dir / prompt_path).resolve())
+
+    out_path = log_dir / f"real_{role}_profile.yaml"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(yaml.safe_dump(raw, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    return out_path
 
 
 def _extract_json_object(raw_text: str) -> dict[str, Any]:
@@ -117,6 +160,9 @@ def _resolve_memory_backend_from_profile(
     embedding_base_url: str | None,
     embedding_dims: int,
 ) -> MemoryBackendConfig:
+    from DefenseAgent.config import AgentProfile
+    from DefenseAgent.memory import MemoryBackendConfig
+
     profile = AgentProfile.from_yaml(profile_path)
     llm_provider = (profile.llm.provider or "").strip().lower()
     llm_model = (profile.llm.model or "").strip()
@@ -148,6 +194,8 @@ def _build_react_agent(
     enable_memory: bool,
     memory_backend: MemoryBackendConfig | None = None,
 ) -> ReActAgent:
+    from DefenseAgent import AgentConfig, ReActAgent
+
     return ReActAgent(
         AgentConfig(
             profile=profile_path,
@@ -160,11 +208,29 @@ def _build_react_agent(
 
 
 def _check_generated_code(code: str) -> None:
-    forbidden = ["def ", "class ", "import ", "from ", "exec(", "eval(", "subprocess", "os.", "sys."]
-    hits = [tok for tok in forbidden if tok in code]
+    lowered = (code or "").lower()
+    forbidden_text = [tok for tok in ("quat", "quaternion", "wxyz", "xyzw") if tok in lowered]
+    if forbidden_text:
+        raise ValueError(f"generated code contains forbidden rotation tokens: {forbidden_text}")
+
+    tree = ast.parse(code, mode="exec")
+    hits: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            hits.append("def")
+        elif isinstance(node, ast.ClassDef):
+            hits.append("class")
+        elif isinstance(node, ast.Import):
+            hits.append("import")
+        elif isinstance(node, ast.ImportFrom):
+            hits.append("from")
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {"exec", "eval"}:
+            hits.append(node.func.id)
+        elif isinstance(node, ast.Name) and node.id in {"subprocess", "os", "sys"}:
+            hits.append(node.id)
     if hits:
-        raise ValueError(f"generated code contains forbidden tokens: {hits}")
-    compile(code, "<real_robot_generated_code>", "exec")
+        raise ValueError(f"generated code contains forbidden syntax: {sorted(set(hits))}")
+    compile(tree, "<real_robot_generated_code>", "exec")
 
 
 def _execute_real_code(
@@ -221,31 +287,108 @@ def _execute_real_code(
         }
 
 
+def _snapshot_robot_initial_state(
+    controller: UR7eVectorController | None,
+    *,
+    dry_run: bool,
+) -> dict[str, Any]:
+    if dry_run or controller is None:
+        return {"dry_run": True, "joints": None, "gripper_open_ratio": None}
+    return {
+        "dry_run": False,
+        "joints": controller.get_current_joints(),
+        "gripper_open_ratio": controller.get_gripper_open_ratio(),
+    }
+
+
+def _restore_robot_initial_state(
+    controller: UR7eVectorController | None,
+    snapshot: dict[str, Any],
+    *,
+    dry_run: bool,
+) -> dict[str, Any]:
+    if dry_run:
+        return {"ok": True, "dry_run": True, "signal": "REAL_RESTORE_SKIPPED"}
+    if controller is None:
+        return {"ok": False, "dry_run": False, "signal": "REAL_RESTORE_NO_CONTROLLER"}
+    try:
+        joints = snapshot.get("joints")
+        if isinstance(joints, list) and len(joints) == 6:
+            controller.move_joints(joints, acceleration=0.8, velocity=0.25)
+        gripper_ratio = snapshot.get("gripper_open_ratio")
+        if isinstance(gripper_ratio, (int, float)) and controller.is_gripper_available():
+            controller.set_gripper(float(gripper_ratio))
+        return {"ok": True, "dry_run": False, "signal": "REAL_RESTORE_OK"}
+    except Exception:
+        return {
+            "ok": False,
+            "dry_run": False,
+            "signal": "REAL_RESTORE_FAILED",
+            "error": traceback.format_exc(),
+        }
+
+
+def _capture_or_copy_images(
+    *,
+    capture_images_fn: Callable[[Path, Path], None] | None,
+    source_front: Path,
+    source_wrist: Path,
+    target_front: Path,
+    target_wrist: Path,
+    dry_run: bool,
+) -> None:
+    target_front.parent.mkdir(parents=True, exist_ok=True)
+    if capture_images_fn is not None:
+        capture_images_fn(target_front, target_wrist)
+        return
+    if dry_run:
+        shutil.copyfile(source_front, target_front)
+        shutil.copyfile(source_wrist, target_wrist)
+        return
+    raise RuntimeError("camera capture callback is required for real execution")
+
+
+def _atomic_infos_from_supervisor(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    infos = payload.get("atomic_task_info", payload.get("atomic_tasks", []))
+    if not isinstance(infos, list):
+        raise ValueError("supervisor output must include atomic_task_info list")
+    return [info for info in infos if isinstance(info, dict)]
+
+
+def _is_success_judge(judge: dict[str, Any]) -> bool:
+    return str(judge.get("task_result", "")).strip().upper() == "SUCCESS"
+
+
 async def run_defense_agent_real_once(
     *,
     task: str,
     current_front_image: Path,
     current_wrist_image: Path,
-    final_front_image: Path,
-    final_wrist_image: Path,
+    planner_profile: Path,
     supervisor_profile: Path,
     coder_profile: Path,
     judger_profile: Path,
     log_dir: Path,
     controller: UR7eVectorController | None,
     dry_run: bool,
+    generate_only: bool,
     max_steps: int | None,
+    max_attempts_per_atomic: int,
     embedding_model: str,
     embedding_api_key: str | None,
     embedding_base_url: str | None,
     embedding_dims: int,
-    capture_final_images_fn: Callable[[], None] | None = None,
+    capture_images_fn: Callable[[Path, Path], None] | None = None,
 ) -> RealDefenseOutputs:
     del embedding_model, embedding_api_key, embedding_base_url, embedding_dims
 
+    planner = _build_react_agent(planner_profile, enable_memory=False)
     supervisor = _build_react_agent(supervisor_profile, enable_memory=False)
     coder = _build_react_agent(coder_profile, enable_memory=False)
     judger = _build_react_agent(judger_profile, enable_memory=False)
+
+    initial_robot_state = _snapshot_robot_initial_state(controller, dry_run=dry_run)
+    _save_json(log_dir / "initial_robot_state.json", initial_robot_state)
 
     observation = {
         "environment": "real_robot",
@@ -261,13 +404,48 @@ async def run_defense_agent_real_once(
         ),
     }
 
-    supervisor_task = (
-        "REAL_ROBOT_VALIDATION\n"
+    planner_task = (
+        "DEFENSE_EI_AGENTS_REAL_PLANNING\n"
         "Task:\n"
         f"{task}\n\n"
         "Real observation JSON:\n"
         f"{json.dumps(observation, ensure_ascii=False, indent=2)}\n\n"
-        "Produce exactly one atomic task for this one-pass real-robot run. Return JSON only."
+        "Decompose the task into primitive_skill-level atomic tasks. Return JSON only."
+    )
+    planner_result = await planner.run(
+        planner_task,
+        max_steps=max_steps,
+        images=[current_front_image, current_wrist_image],
+    )
+    raw_planner_text = planner_result.final_answer
+    plan = _extract_json_object(raw_planner_text)
+    _save_json(log_dir / "defense_ei_plan.json", plan)
+    _save_text(log_dir / "defense_ei_plan_raw.txt", raw_planner_text)
+
+    if str(plan.get("status", "")).strip().lower() == "completed":
+        return RealDefenseOutputs(
+            plan=plan,
+            atomic_task_info={"status": "completed", "summary": plan.get("summary", ""), "atomic_task_info": []},
+            attempts=[],
+            completed=True,
+            code="",
+            execution={"ok": True, "dry_run": dry_run, "signal": "PLAN_ALREADY_COMPLETED"},
+            judge={"task_result": "SUCCESS", "analysis": ""},
+            raw_planner_text=raw_planner_text,
+            raw_supervisor_text="",
+            raw_coder_text="",
+            raw_judger_text="",
+        )
+
+    supervisor_task = (
+        "DEFENSE_EI_AGENTS_REAL_SUPERVISION\n"
+        "Task:\n"
+        f"{task}\n\n"
+        "Planner JSON:\n"
+        f"{json.dumps(plan, ensure_ascii=False, indent=2)}\n\n"
+        "Real observation JSON:\n"
+        f"{json.dumps(observation, ensure_ascii=False, indent=2)}\n\n"
+        "Produce atomic_task_info for every planner atomic task. Return JSON only."
     )
     supervisor_result = await supervisor.run(
         supervisor_task,
@@ -275,67 +453,194 @@ async def run_defense_agent_real_once(
         images=[current_front_image, current_wrist_image],
     )
     raw_supervisor_text = supervisor_result.final_answer
-    plan = _extract_json_object(raw_supervisor_text)
-    _save_json(log_dir / "real_evobody_plan.json", plan)
-    _save_text(log_dir / "real_evobody_plan_raw.txt", raw_supervisor_text)
+    atomic_task_info = _extract_json_object(raw_supervisor_text)
+    _save_json(log_dir / "defense_ei_atomic_task_info.json", atomic_task_info)
+    _save_text(log_dir / "defense_ei_atomic_task_info_raw.txt", raw_supervisor_text)
 
-    coder_task = (
-        "REAL_ROBOT_VALIDATION\n"
-        "Use the real-robot-code-contract skill. Do not call MuJoCo tools.\n\n"
-        "Task:\n"
-        f"{task}\n\n"
-        "Atomic task JSON generated by supervisor:\n"
-        f"{json.dumps(plan, ensure_ascii=False, indent=2)}\n\n"
-        "Real observation JSON:\n"
-        f"{json.dumps(observation, ensure_ascii=False, indent=2)}\n\n"
-        "Return runnable Python code only."
-    )
-    coder_result = await coder.run(
-        coder_task,
-        max_steps=max_steps,
-        images=[current_front_image, current_wrist_image],
-    )
-    raw_coder_text = coder_result.final_answer
-    code = _extract_python_code(raw_coder_text)
-    _save_text(log_dir / "real_atomic_actions.py", code)
-    _save_text(log_dir / "real_atomic_actions_raw.txt", raw_coder_text)
+    atomic_infos = _atomic_infos_from_supervisor(atomic_task_info)
+    if not atomic_infos:
+        return RealDefenseOutputs(
+            plan=plan,
+            atomic_task_info=atomic_task_info,
+            attempts=[],
+            completed=True,
+            code="",
+            execution={"ok": True, "dry_run": dry_run, "signal": "NO_ATOMIC_TASKS"},
+            judge={"task_result": "SUCCESS", "analysis": ""},
+            raw_planner_text=raw_planner_text,
+            raw_supervisor_text=raw_supervisor_text,
+            raw_coder_text="",
+            raw_judger_text="",
+        )
 
-    execution = _execute_real_code(code=code, controller=controller, dry_run=dry_run)
-    _save_json(log_dir / "real_execution.json", execution)
-    if not bool(execution.get("ok")):
-        _save_text(log_dir / "real_execution_error.txt", str(execution.get("error", "")))
-    if capture_final_images_fn is not None:
-        capture_final_images_fn()
-    if not final_front_image.exists() or not final_wrist_image.exists():
-        raise FileNotFoundError("final RealSense images are required before judging")
+    attempts: list[dict[str, Any]] = []
+    latest_front = current_front_image
+    latest_wrist = current_wrist_image
+    last_code = ""
+    last_execution: dict[str, Any] = {}
+    last_judge: dict[str, Any] = {}
+    raw_coder_text = ""
+    raw_judger_text = ""
+    completed = True
 
-    judge_prompt = (
-        "REAL_ROBOT_VALIDATION\n"
-        "Task description:\n"
-        f"{task}\n\n"
-        "Generated and executed atomic action code:\n"
-        "```python\n"
-        f"{code}\n"
-        "```\n\n"
-        "Real execution report:\n"
-        f"{json.dumps(execution, ensure_ascii=False, indent=2)}\n\n"
-        "Return JSON only with keys task_result and analysis."
-    )
-    judger_result = await judger.run(
-        judge_prompt,
-        max_steps=max_steps,
-        images=[final_front_image, final_wrist_image],
-    )
-    raw_judger_text = judger_result.final_answer
-    judge = _extract_json_object(raw_judger_text)
-    _save_json(log_dir / "real_finished_view_judge.json", judge)
+    for atomic_index, atomic_info in enumerate(atomic_infos, start=1):
+        feedback: dict[str, Any] | None = None
+        atomic_done = False
+        for attempt_index in range(1, max(1, int(max_attempts_per_atomic)) + 1):
+            attempt_dir = log_dir / f"atomic_{atomic_index:02d}" / f"attempt_{attempt_index:02d}"
+            attempt_dir.mkdir(parents=True, exist_ok=True)
+            _save_json(attempt_dir / "atomic_task_info.json", atomic_info)
+
+            coder_task = (
+                "DEFENSE_EI_AGENTS_REAL_CODING\n"
+                "Use the real-robot-code-contract and primitive-skill-contract skills. "
+                "Do not call simulation tools.\n\n"
+                "High-level task:\n"
+                f"{task}\n\n"
+                "Current atomic task info JSON:\n"
+                f"{json.dumps(atomic_info, ensure_ascii=False, indent=2)}\n\n"
+                "Current observation JSON:\n"
+                f"{json.dumps({'front_rgb': str(latest_front), 'wrist_rgb': str(latest_wrist)}, ensure_ascii=False, indent=2)}\n\n"
+                "Prior judger feedback JSON for this same atomic task, or null:\n"
+                f"{json.dumps(feedback, ensure_ascii=False, indent=2)}\n\n"
+                "Return runnable Python code only."
+            )
+            coder_result = await coder.run(
+                coder_task,
+                max_steps=max_steps,
+                images=[latest_front, latest_wrist],
+            )
+            raw_coder_text = coder_result.final_answer
+            last_code = _extract_python_code(raw_coder_text)
+            _save_text(attempt_dir / "real_atomic_actions.py", last_code)
+            _save_text(attempt_dir / "real_atomic_actions_raw.txt", raw_coder_text)
+            _save_text(log_dir / "real_atomic_actions.py", last_code)
+
+            try:
+                _check_generated_code(last_code)
+                syntax_report = {"ok": True, "signal": "SYNTAX_CHECK_OK"}
+            except Exception:
+                syntax_report = {
+                    "ok": False,
+                    "signal": "SYNTAX_CHECK_FAILED",
+                    "error": traceback.format_exc(),
+                }
+            _save_json(attempt_dir / "syntax_check.json", syntax_report)
+
+            if generate_only:
+                last_execution = {"ok": bool(syntax_report.get("ok")), "dry_run": True, "signal": "REAL_CODE_GENERATED_ONLY"}
+                _save_json(attempt_dir / "real_execution.json", last_execution)
+                attempts.append(
+                    {
+                        "atomic_id": atomic_info.get("id", atomic_index),
+                        "attempt": attempt_index,
+                        "syntax": syntax_report,
+                        "execution": last_execution,
+                        "judge": {},
+                    }
+                )
+                atomic_done = bool(syntax_report.get("ok"))
+                break
+
+            if not bool(syntax_report.get("ok")):
+                last_execution = {"ok": False, "dry_run": dry_run, "signal": "SYNTAX_CHECK_FAILED"}
+            else:
+                last_execution = _execute_real_code(code=last_code, controller=controller, dry_run=dry_run)
+            _save_json(attempt_dir / "real_execution.json", last_execution)
+            if not bool(last_execution.get("ok")):
+                _save_text(attempt_dir / "real_execution_error.txt", str(last_execution.get("error", "")))
+
+            after_front = attempt_dir / "after_front_rgb.png"
+            after_wrist = attempt_dir / "after_wrist_rgb.png"
+            _capture_or_copy_images(
+                capture_images_fn=capture_images_fn,
+                source_front=latest_front,
+                source_wrist=latest_wrist,
+                target_front=after_front,
+                target_wrist=after_wrist,
+                dry_run=dry_run,
+            )
+
+            judge_prompt = (
+                "DEFENSE_EI_AGENTS_REAL_JUDGING\n"
+                "High-level task:\n"
+                f"{task}\n\n"
+                "Atomic task info JSON:\n"
+                f"{json.dumps(atomic_info, ensure_ascii=False, indent=2)}\n\n"
+                "Generated and executed atomic action code:\n"
+                "```python\n"
+                f"{last_code}\n"
+                "```\n\n"
+                "Real execution report:\n"
+                f"{json.dumps(last_execution, ensure_ascii=False, indent=2)}\n\n"
+                "Return JSON only with keys task_result and analysis."
+            )
+            judger_result = await judger.run(
+                judge_prompt,
+                max_steps=max_steps,
+                images=[after_front, after_wrist],
+            )
+            raw_judger_text = judger_result.final_answer
+            last_judge = _extract_json_object(raw_judger_text)
+            _save_json(attempt_dir / "real_atomic_judge.json", last_judge)
+            _save_text(attempt_dir / "real_atomic_judge_raw.txt", raw_judger_text)
+
+            attempts.append(
+                {
+                    "atomic_id": atomic_info.get("id", atomic_index),
+                    "attempt": attempt_index,
+                    "syntax": syntax_report,
+                    "execution": last_execution,
+                    "judge": last_judge,
+                    "after_front_rgb": str(after_front),
+                    "after_wrist_rgb": str(after_wrist),
+                }
+            )
+
+            if _is_success_judge(last_judge):
+                latest_front = after_front
+                latest_wrist = after_wrist
+                atomic_done = True
+                break
+
+            feedback = {
+                "task_result": "FAIL",
+                "analysis": str(last_judge.get("analysis", "")).strip(),
+                "execution": last_execution,
+            }
+            restore_report = _restore_robot_initial_state(controller, initial_robot_state, dry_run=dry_run)
+            _save_json(attempt_dir / "restore_initial_robot_state.json", restore_report)
+            restored_front = attempt_dir / "restored_front_rgb.png"
+            restored_wrist = attempt_dir / "restored_wrist_rgb.png"
+            _capture_or_copy_images(
+                capture_images_fn=capture_images_fn,
+                source_front=latest_front,
+                source_wrist=latest_wrist,
+                target_front=restored_front,
+                target_wrist=restored_wrist,
+                dry_run=dry_run,
+            )
+            latest_front = restored_front
+            latest_wrist = restored_wrist
+
+        if not atomic_done:
+            completed = False
+            break
+
+    _save_json(log_dir / "defense_ei_attempts.json", {"attempts": attempts, "completed": completed})
+    _save_json(log_dir / "real_execution.json", last_execution)
+    _save_json(log_dir / "real_finished_view_judge.json", last_judge)
     _save_text(log_dir / "real_finished_view_judge_raw.txt", raw_judger_text)
 
     return RealDefenseOutputs(
         plan=plan,
-        code=code,
-        execution=execution,
-        judge=judge,
+        atomic_task_info=atomic_task_info,
+        attempts=attempts,
+        completed=completed,
+        code=last_code,
+        execution=last_execution,
+        judge=last_judge,
+        raw_planner_text=raw_planner_text,
         raw_supervisor_text=raw_supervisor_text,
         raw_coder_text=raw_coder_text,
         raw_judger_text=raw_judger_text,
@@ -343,24 +648,38 @@ async def run_defense_agent_real_once(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="One-pass DefenseAgent real-robot evaluation.")
+    parser = argparse.ArgumentParser(description="DefenseAgent real-robot defense_ei_agents evaluation.")
     parser.add_argument("--task", required=True, help="High-level task description.")
+    parser.add_argument("--planner-profile", type=Path, default=DEFAULT_PLANNER_PROFILE)
     parser.add_argument("--supervisor-profile", type=Path, default=DEFAULT_SUPERVISOR_PROFILE)
     parser.add_argument("--coder-profile", type=Path, default=DEFAULT_CODER_PROFILE)
     parser.add_argument("--judger-profile", type=Path, default=DEFAULT_JUDGER_PROFILE)
     parser.add_argument("--log-root", type=Path, default=DEFAULT_LOG_ROOT)
     parser.add_argument("--max-steps", type=int, default=None)
+    parser.add_argument("--max-attempts-per-atomic", type=int, default=3)
 
     parser.add_argument("--robot-ip", default=ROBOT_IP)
     parser.add_argument("--robotiq-urscript-defs-path", default="")
     parser.add_argument("--strict-gripper-connection", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="Generate and judge flow without connecting to UR7e.")
+    parser.add_argument(
+        "--generate-only",
+        action="store_true",
+        help="Run supervisor/coder generation only, then exit before code execution and judging.",
+    )
+    parser.add_argument(
+        "--capture-only",
+        action="store_true",
+        help="Only capture current front/wrist RGB images, then exit before agent generation or robot connection.",
+    )
 
     parser.add_argument("--camera-serials", default="", help="Comma-separated RealSense serials: front,wrist. Auto-discovers if omitted.")
     parser.add_argument("--camera-width", type=int, default=640)
     parser.add_argument("--camera-height", type=int, default=480)
     parser.add_argument("--camera-fps", type=int, default=30)
     parser.add_argument("--camera-warmup-frames", type=int, default=15)
+    parser.add_argument("--current-front-image", type=Path, default=None, help="Use an existing front RGB image instead of capturing.")
+    parser.add_argument("--current-wrist-image", type=Path, default=None, help="Use an existing wrist RGB image instead of capturing.")
 
     parser.add_argument("--embedding-model", default=os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small"))
     parser.add_argument("--embedding-api-key", default=os.environ.get("EMBEDDING_API_KEY"))
@@ -376,8 +695,6 @@ async def _main_async() -> int:
 
     current_front = run_dir / "current_front_rgb.png"
     current_wrist = run_dir / "current_wrist_rgb.png"
-    final_front = run_dir / "finished_front_rgb.png"
-    final_wrist = run_dir / "finished_wrist_rgb.png"
     serials = [s.strip() for s in str(args.camera_serials).split(",") if s.strip()]
 
     controller: UR7eVectorController | None = None
@@ -387,6 +704,67 @@ async def _main_async() -> int:
             robotiq_urscript_defs_path=str(args.robotiq_urscript_defs_path).strip() or None,
             strict_gripper_connection=bool(args.strict_gripper_connection),
         )
+
+    source_front = _resolve_path(args.current_front_image) if args.current_front_image else None
+    source_wrist = _resolve_path(args.current_wrist_image) if args.current_wrist_image else None
+    planner_profile = _prepare_real_profile_copy(_resolve_path(args.planner_profile), run_dir, "planner")
+    supervisor_profile = _prepare_real_profile_copy(_resolve_path(args.supervisor_profile), run_dir, "supervisor")
+    coder_profile = _prepare_real_profile_copy(_resolve_path(args.coder_profile), run_dir, "coder")
+    judger_profile = _prepare_real_profile_copy(_resolve_path(args.judger_profile), run_dir, "judger")
+    if source_front or source_wrist:
+        if not source_front or not source_wrist:
+            raise ValueError("--current-front-image and --current-wrist-image must be provided together.")
+        if not source_front.exists() or not source_wrist.exists():
+            raise FileNotFoundError(f"current image(s) not found: {source_front}, {source_wrist}")
+        current_front = source_front
+        current_wrist = source_wrist
+
+        try:
+            if controller is not None:
+                _log(f"Connecting UR7e controller at {args.robot_ip}")
+                controller.connect()
+                if controller.is_gripper_available():
+                    _log(f"Gripper backend: {controller.get_gripper_backend()}")
+
+            outputs = await run_defense_agent_real_once(
+                task=str(args.task).strip(),
+                current_front_image=current_front,
+                current_wrist_image=current_wrist,
+                planner_profile=planner_profile,
+                supervisor_profile=supervisor_profile,
+                coder_profile=coder_profile,
+                judger_profile=judger_profile,
+                log_dir=run_dir,
+                controller=controller,
+                dry_run=bool(args.dry_run),
+                generate_only=bool(args.generate_only),
+                max_steps=args.max_steps,
+                max_attempts_per_atomic=int(args.max_attempts_per_atomic),
+                embedding_model=str(args.embedding_model),
+                embedding_api_key=args.embedding_api_key,
+                embedding_base_url=args.embedding_base_url,
+                embedding_dims=int(args.embedding_dims),
+                capture_images_fn=None,
+            )
+        finally:
+            if controller is not None:
+                controller.close()
+
+        summary = {
+            "run_dir": str(run_dir),
+            "current_front_image": str(current_front),
+            "current_wrist_image": str(current_wrist),
+            "plan_status": outputs.plan.get("status"),
+            "atomic_task_count": len(_atomic_infos_from_supervisor(outputs.atomic_task_info)),
+            "completed": outputs.completed,
+            "attempt_count": len(outputs.attempts),
+            "execution_ok": bool(outputs.execution.get("ok")),
+            "execution_signal": outputs.execution.get("signal"),
+            "judge_result": outputs.judge.get("task_result"),
+        }
+        _save_json(run_dir / "summary.json", summary)
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        return 0 if outputs.completed else 2
 
     _log("Starting RealSense capture")
     with RealSenseRGBPair(
@@ -400,6 +778,21 @@ async def _main_async() -> int:
         imageio.imwrite(current_front, front_img)
         imageio.imwrite(current_wrist, wrist_img)
 
+        if args.capture_only:
+            summary = {
+                "run_dir": str(run_dir),
+                "capture_only": True,
+                "front_image": str(current_front),
+                "wrist_image": str(current_wrist),
+                "front_shape": list(front_img.shape),
+                "wrist_shape": list(wrist_img.shape),
+                "front_exists": current_front.exists(),
+                "wrist_exists": current_wrist.exists(),
+            }
+            _save_json(run_dir / "summary.json", summary)
+            print(json.dumps(summary, ensure_ascii=False, indent=2))
+            return 0
+
         try:
             if controller is not None:
                 _log(f"Connecting UR7e controller at {args.robot_ip}")
@@ -407,29 +800,30 @@ async def _main_async() -> int:
                 if controller.is_gripper_available():
                     _log(f"Gripper backend: {controller.get_gripper_backend()}")
 
-            def capture_final_images() -> None:
+            def capture_images(front_path: Path, wrist_path: Path) -> None:
                 front_done, wrist_done = cameras.capture()
-                imageio.imwrite(final_front, front_done)
-                imageio.imwrite(final_wrist, wrist_done)
+                imageio.imwrite(front_path, front_done)
+                imageio.imwrite(wrist_path, wrist_done)
 
             outputs = await run_defense_agent_real_once(
                 task=str(args.task).strip(),
                 current_front_image=current_front,
                 current_wrist_image=current_wrist,
-                final_front_image=final_front,
-                final_wrist_image=final_wrist,
-                supervisor_profile=_resolve_path(args.supervisor_profile),
-                coder_profile=_resolve_path(args.coder_profile),
-                judger_profile=_resolve_path(args.judger_profile),
+                planner_profile=planner_profile,
+                supervisor_profile=supervisor_profile,
+                coder_profile=coder_profile,
+                judger_profile=judger_profile,
                 log_dir=run_dir,
                 controller=controller,
                 dry_run=bool(args.dry_run),
+                generate_only=bool(args.generate_only),
                 max_steps=args.max_steps,
+                max_attempts_per_atomic=int(args.max_attempts_per_atomic),
                 embedding_model=str(args.embedding_model),
                 embedding_api_key=args.embedding_api_key,
                 embedding_base_url=args.embedding_base_url,
                 embedding_dims=int(args.embedding_dims),
-                capture_final_images_fn=capture_final_images,
+                capture_images_fn=capture_images,
             )
 
         finally:
@@ -439,12 +833,16 @@ async def _main_async() -> int:
     summary = {
         "run_dir": str(run_dir),
         "plan_status": outputs.plan.get("status"),
+        "atomic_task_count": len(_atomic_infos_from_supervisor(outputs.atomic_task_info)),
+        "completed": outputs.completed,
+        "attempt_count": len(outputs.attempts),
         "execution_ok": bool(outputs.execution.get("ok")),
+        "execution_signal": outputs.execution.get("signal"),
         "judge_result": outputs.judge.get("task_result"),
     }
     _save_json(run_dir / "summary.json", summary)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
-    return 0 if bool(outputs.execution.get("ok")) else 2
+    return 0 if outputs.completed else 2
 
 
 def main() -> int:

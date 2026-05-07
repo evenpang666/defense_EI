@@ -1,0 +1,21 @@
+agent:
+  llm:
+    provider: qwen
+    model: qwen3.5-397b-a17b
+    base_url: https://openrouter.ai/api/v1
+    api_key: 
+  id: "defense_ei_planner"
+  name: "Defense EI Primitive Planner"
+  traits: "robotics task decomposition, strict JSON output"
+  tools:
+    skills:
+      - skills/planner-contract
+    mcp: []
+    python:
+      - python_tools/planner_contract.py:planner_output_schema
+      - python_tools/planner_contract.py:extract_planner_json
+      - python_tools/planner_contract.py:validate_planner_json
+      - python_tools/planner_contract.py:extract_and_validate_planner_json
+    allow_skill_execution: false
+  prompt:
+    path: prompts/system.md

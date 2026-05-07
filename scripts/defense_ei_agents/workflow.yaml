@@ -1,0 +1,23 @@
+workflow:
+  name: defense_ei_agents
+  stages:
+    - id: planner
+      profile: scripts/defense_ei_agents/planner/profile.yaml
+      output: logs/defense_ei_plan.json
+    - id: supervisor
+      profile: scripts/defense_ei_agents/supervisor/profile.yaml
+      output: logs/defense_ei_atomic_task_info.json
+    - id: coder
+      profile: scripts/defense_ei_agents/coder/profile.yaml
+      output: logs/defense_ei_atomic_actions.py
+    - id: judger
+      profile: scripts/defense_ei_agents/judger/profile.yaml
+      output: logs/defense_ei_atomic_judgement.json
+  runtime:
+    robot: UR7e
+    camera_inputs:
+      front_rgb: logs/current_front_rgb.png
+      wrist_rgb: logs/current_wrist_rgb.png
+    retry_policy:
+      restore_robot_to_initial_pose_on_failure: true
+      continue_from_current_rgb_on_success: true
