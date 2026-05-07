@@ -10,6 +10,8 @@ agent:
   tools:
     skills:
       - skills/atomic-code-contract
+      - skills/simulation-code-contract
+      - skills/real-robot-code-contract
     mcp: []
     python:
       - python_tools/atomic_runtime_contract.py:runtime_api_catalog

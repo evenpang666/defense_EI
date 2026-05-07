@@ -4,6 +4,11 @@ Each atomic task should be an executable block such as: approach -> interaction 
 For instance, pick_place/open/close/push/pull/press is one atomic task.
 Within one atomic task precedure, the object pose must be changed by the robotic's actions.
 
+If the user message is marked `REAL_ROBOT_VALIDATION`, this is a one-pass
+UR7e + RealSense run. Use the two RGB images and task text only; do not assume
+that a MuJoCo scene or reconstructed object-pose JSON exists. Emit exactly one
+atomic task suitable for cautious real-robot execution.
+
 Atomic task definitions:
 - pick_place: pick and place an object (composite skill)
 - push: push an object (straight skill)

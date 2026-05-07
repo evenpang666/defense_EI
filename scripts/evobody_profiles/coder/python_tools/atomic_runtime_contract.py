@@ -6,9 +6,43 @@ import json
 from typing import Any
 
 
-def runtime_api_catalog() -> dict[str, Any]:
+def runtime_api_catalog(environment: str = "simulation") -> dict[str, Any]:
     """Return allowed runtime APIs for generated robotics code."""
+    env = str(environment or "simulation").strip().lower()
+    if env in {"real", "real_robot", "real-robot", "ur7e", "hardware", "真机"}:
+        return {
+            "environment": "real",
+            "primitive": [
+                "move_to(pos, quat, num_steps)",
+                "move_ee(dx, dy, dz, droll, dpitch, dyaw, steps)",
+                "gripper_control(value, delay)",
+                "ee_pose()",
+            ],
+            "composite": [
+                "pick_and_place(...)",
+                "pick_place(...)",
+                "push(...)",
+                "pull(...)",
+                "press(...)",
+                "open(...)",
+                "close(...)",
+                "pour(...)",
+                "move_x(...)",
+                "move_y(...)",
+                "move_z(...)",
+                "rotate_x(...)",
+                "rotate_y(...)",
+                "rotate_z(...)",
+            ],
+            "notes": [
+                "UR7e real runtime; no MuJoCo scene tools.",
+                "Translation is meters; move_ee rotations are degrees.",
+                "Gripper value is 0..255, where 0=open and 255=closed.",
+                "Quaternion order is wxyz.",
+            ],
+        }
     return {
+        "environment": "simulation",
         "primitive": [
             "move_to(pos, quat, num_steps)",
             "move_ee(dx, dy, dz, droll, dpitch, dyaw, steps)",
@@ -39,6 +73,6 @@ def runtime_api_catalog() -> dict[str, Any]:
 
 def check_forbidden_tokens(code: str) -> str:
     """Return a JSON report indicating whether forbidden tokens are present."""
-    forbidden = ["def ", "class ", "import ", "from ", "open(", "exec(", "eval(", "subprocess", "os.", "sys."]
+    forbidden = ["def ", "class ", "import ", "from ", "exec(", "eval(", "subprocess", "os.", "sys."]
     hit = [tok for tok in forbidden if tok in code]
     return json.dumps({"ok": len(hit) == 0, "forbidden_hits": hit}, ensure_ascii=False)
